@@ -40,7 +40,6 @@
 #include <gsl/gsl_qrng.h>
 #include <gsl/gsl_errno.h>
 #include <gsl/gsl_spline.h>
-#include <gsl/gsl_integration.h>
 #include <gsl/gsl_statistics.h>
 
 
@@ -96,7 +95,7 @@ double	nu 		= 0.0; 		// switching cost --- I don't need this!
 double 	fm_shr	= 0.67;	// firm's surplus share
 double 	kappa	= 0.27;//.1306; corresponds to HM number
 double *	b; // unemployment benefit
-double 	brt		= 0.42;
+double 	brt		= 0.52;
 double 	bdur	= 6.0;
 double 	privn	= 0.18;
 double 	sbar	= 0.02;	// will endogenize this a la Cheremukhin (2011)
@@ -247,8 +246,7 @@ double dpmatch(const double theta);
 double invq(const double q);
 double invp(const double p);
 double dinvq(const double q);
-double hetero_ev(double eps, void * Vp);
-double dhetero_ev(double eps, void * Vp);
+
 
 // calibration functions
 double bndCalMinwrap(double (*Vobj)(unsigned n, const double *x, double *grad, void* params),
@@ -336,7 +334,6 @@ int main(int argc,char *argv[]){
 	gsl_matrix_memcpy(LambdaZCoef,&LC.matrix);
 	readmat("var_eta.csv",var_eta);
 	if(homosk_zeta==1){
-		// zeta covariance matrix is diagonal and maybe homoskedastic
 		gsl_matrix_set_identity(var_zeta);
 		gsl_matrix_scale(var_zeta,sig_zet);
 	}
@@ -348,7 +345,7 @@ int main(int argc,char *argv[]){
 			}
 		}
 	}
-	else // arbitrary, potentially non-diagonal
+	else
 		readmat("var_zeta.csv",var_zeta);
 
 	if(rescale_var ==1){
@@ -382,7 +379,7 @@ int main(int argc,char *argv[]){
 	/* Calibration Loop!
 	*/
 	double x0_0[]	= {phi	,sig_psi	,tau	,scale_s	,shape_s	,effic,	chi_co[0]	,chi_co[1]	,chi_co[2]};
-	double lb_0[]	= {0.25	,0.00005	,0.005	,0.035		,0.015		,0.5	,-3.0			,-3.0			,-2.0	};
+	double lb_0[]	= {0.25	,0.00005	,0.005	,0.035		,0.015		,0.75	,-2.0			,-2.0			,-2.0	};
 	double ub_0[]	= {0.6	,0.25		,0.2	,0.15		,0.20		,1.35	,.00			,.00			,.00	};
 
 	int Ntotx = sizeof(x0_0)/sizeof(double);
@@ -561,7 +558,7 @@ int main(int argc,char *argv[]){
 	if(verbose>=0 && status >=1) printf("System not solved\n");
 	if(verbose>=0 && status ==0) printf("System successfully solved\n");
  	// update and solve the stochastic process
-//	status += sol_zproc(st, st->ss, st->xss);
+	status += sol_zproc(st, st->ss, st->xss);
 
 
 	//status += ss_moments(&simdat, ss, xss);
@@ -584,11 +581,7 @@ int main(int argc,char *argv[]){
 	gsl_matrix_free(var_eta); gsl_matrix_free(var_zeta);
 	gsl_matrix_free(pdf_occind);
 	gsl_matrix_free(f_skills);
-	free(b);
-	for(l=0;l<Noccs+1;l++)
-		free(chi[l]);
-	free(chi);
-	free(st);
+
 
 	return status;
 }
@@ -763,7 +756,7 @@ int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef *sys, int sol
 
 	gsl_blas_dgemm(CblasNoTrans,CblasNoTrans,1.0,P1invP0P2NN,sys->N,0.0,P1invP0P2N);
 //	gsl_matrix_memcpy(P1invP0P2N,P1invP0P2NN);
-	double mnorm = norm1mat(P1invP0P2N),dnorm =0 ;
+	double mnorm = norm1mat(P1invP0P2N);
 	double mnorm0= fabs(norm1mat(P1invP0P2N));
 	double mnorml= 1e6;
 	for(i = 0;i<maxrecur;i++){
@@ -786,7 +779,6 @@ int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef *sys, int sol
 		if((fabs(mnorm)/mnorm0<dyn_tol) || (fabs(mnorml-mnorm)<dyn_tol*10.0 && fabs(mnorm)/mnorm0<dyn_tol*10.0))
 			break;
 		gsl_matrix_add(P0PP,P1invP0P2N);
-		dnorm  = mnorm-mnorml;
 		mnorml = mnorm;
 	}// end for(i=0;i<maxrecur;i++)
 	//status = i<maxrecur-1? status : status+1;
@@ -795,8 +787,8 @@ int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef *sys, int sol
 		fprintf(solerr,"Forward expectations stopped at %f, did not converge\n",mnorm);
 		fclose(solerr);
 		if(verbose>=2)
-			printf("Forward expectations stopped at %f (diff = %f), did not converge\n",mnorm,dnorm);
-		if(fabs(mnorm)>mnorm0 && dnorm>0)
+			printf("Forward expectations stopped at %f, did not converge\n",mnorm);
+		if(fabs(mnorm)>mnorm0)
 			status++;
 	}
 
@@ -842,14 +834,13 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 
 	int status,l,d,dd,ll,iter,itermax,i,allocZz, JJ1;
 	itermax = 2500;
-	
-	gsl_vector 	* W_l0,*W_ld, *lW_l0;
-	gsl_vector 	* Uw_ld;
-	gsl_vector 	* gld,*lgld,*thetald,*findrt, *sld;
-	gsl_vector 	* ret_d;
-	gsl_matrix 	* m_distg; //max dist g, ave dist g, max dist W0
-	gsl_matrix 	* pld,*x;//,*lx;
-	double 		* R_dP_ld = malloc((Noccs*2+1)*sizeof(double));
+
+	gsl_vector * W_l0,*W_ld, *lW_l0;
+	gsl_vector * Uw_ld;
+	gsl_vector * gld,*lgld,*thetald,*findrt, *sld;
+	gsl_vector * ret_d;
+	gsl_matrix * m_distg; //max dist g, ave dist g, max dist W0
+	gsl_matrix * pld,*x;//,*lx;
 	if(Zz == NULL){
 		Zz = gsl_vector_calloc(Nx);
 		allocZz = 1;
@@ -875,7 +866,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 	if(printlev>=2){
 		m_distg = gsl_matrix_calloc(itermax,3);
 	}
-	
+
 	// initialize the policies:
 	for(l=0;l<Noccs+1;l++){
 		double bl = l>0 ? b[1] : b[0];
@@ -912,7 +903,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 		printvec("W_l0_0.csv",W_l0);
 		printvec("W_ld_0.csv",W_ld);
 	}
-	double maxdistg=1e-4,maxdistW=1e-4,adistg=1e-4,lmaxdistW0=1.0;
+	double maxdistg=1e-4,maxdistW=1e-4,adistg=1e-4;
 	double lmaxdistg = 100.0;
 
 
@@ -935,7 +926,6 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 		int vfitermax = break_flag == 1 ? itermax : itermax/2;
 		if(iter==0){
 		for(vfiter =0;vfiter<itermax/2;vfiter++){
-			maxdistW0 = 0.0;
 			for(d=0;d<Noccs;d++){
 				l = d+1;
 				double zd = Zz->data[d+Notz];
@@ -963,6 +953,8 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 			}
 
 			// W_l0
+
+			maxdistW0 = 0.0;
 			for(l=0;l<Noccs+1;l++){
 				double bl = l>0 ? b[1]:b[0];
 				for(ll=0;ll<2;ll++){
@@ -1008,8 +1000,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 
 		maxdistg = 0.0;
 		gsl_vector_memcpy(lgld,gld);
-		gsl_integration_workspace * integw =
-				gsl_integration_workspace_alloc(1000);
+
 		//either make ret_d local, private or do not parallelize
 		//#pragma omp parallel for default(shared) private(d,l,dd,ret_d)
 		for(l=0;l<Noccs+1;l++){
@@ -1022,57 +1013,32 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 
 						double Wdif	= W_ld->data[l*Noccs+d] - (1.0-1.0/bdur)*W_l0->data[l + ll*(Noccs+1)] - 1.0/bdur*W_l0->data[l + Noccs+1];
 						//Wdif = Wdif<0.0 ?  0.0 : Wdif;
-						double pld_ld = gsl_matrix_get(pld,l+ll*(Noccs+1),d);
+						double pld_ld =gsl_matrix_get(pld,l+ll*(Noccs+1),d);
 						double post = pld_ld > 0 ? -kappa*gsl_vector_get(thetald,l*Noccs+d)/pld_ld : 0.0;
 
 						double arr_d = (1.0-fm_shr)*(chi[l][d]*(1.0+zd) -nud - (1.0-(double)ll)*bl - ((double)ll)*privn + beta*Wdif)
 								+ (1.0-(double)ll)*bl + ((double)ll)*privn + beta*((1.0-1.0/bdur)*W_l0->data[l+ ll*(Noccs+1)] + 1.0/bdur*W_l0->data[l + Noccs+1]);
-						arr_d = arr_d > W_ld->data[l*Noccs+d] ? W_ld->data[l*Noccs+d]: arr_d;
+						arr_d = arr_d > W_ld->data[l*Noccs+d] ?W_ld->data[l*Noccs+d]:arr_d;
 						gsl_vector_set(ret_d,d,pld_ld*arr_d);
 				}
-				//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-				// gld
-				
-				// calculate choice probs and integrate to be sure all options integrate to 1:
 				double sexpret_dd =0.0;
-				gsl_function gprob;
-				gprob.function = &hetero_ev;
-				gprob.params = R_dP_ld;
-				for(dd=0;dd<Noccs;dd++){ // values in any possible direction
-					double ret_d_dd = gsl_vector_get(ret_d,dd);
-					R_dP_ld[dd+1] =  ret_d_dd > 0 &&  ret_d_dd < 1.e10 ? ret_d_dd : 0.0;
-					R_dP_ld[dd+1+Noccs] = sig_psi*gsl_matrix_get(pld,l+ll*(Noccs+1),dd);
-				}				
-				for(d=0;d<Noccs;d++){ // choice probabilities
-					R_dP_ld[0] = (double)d;
-					double gg,ggerr;
-					gsl_integration_qags (&gprob,-20,20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
-					sexpret_dd += gg;
-					gsl_vector_set(gld,l*Noccs+d+ll*JJ1,gg );
-				}
-				for(d=0;d<Noccs;d++){ 
-					double g_updaterate = 1.0;
-					// convex combination between gld and lgld
-					gsl_vector_set(gld, l*Noccs+d+ll*JJ1,
-						(1.- g_updaterate)* gsl_vector_get(lgld,l*Noccs+d+ll*JJ1)
-						// rescale by sexpret_dd because not exactly add to 1
-						+ g_updaterate* gsl_vector_get(gld,l*Noccs+d+ll*JJ1)/sexpret_dd);
-				}
-				// check it was pretty close to 1
-				if(sexpret_dd < 1-1.e-2){
-					solerr = fopen(soler_f,"a+");
-					fprintf(solerr,"SS choice probabilities not add to 1 at (l,d)=(%d,%d)\n",l,dd);
-					fclose(solerr);
-					if(verbose>=2)
-						printf("SS choice probabilities not add to 1 at (l,d)=(%d,%d)\n",l,dd);
-				}
-				
-				
-				//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-				// theta
-				for(d=0;d<Noccs;d++){
-					double zd = Zz->data[d+Notz];
+				for(dd=0;dd<Noccs;dd++)
+					sexpret_dd = gsl_vector_get(ret_d,dd)<= 0.0 ? sexpret_dd :
+						exp(sig_psi*gsl_vector_get(ret_d,dd)) + sexpret_dd;
 
+				for(d=0;d<Noccs;d++){
+					//gld
+					double zd = Zz->data[d+Notz];
+					// known return in occ d
+					double gg = exp(sig_psi*gsl_vector_get(ret_d,d))/sexpret_dd;
+					if(ret_d->data[d]<=0)
+						gg =0;
+					if(sexpret_dd<=0.0)
+						gg =1.0/(double)dd;
+					double g_updaterate = 0.0;//1.0/sqrt(iter+2.0);
+					gld->data[l*Noccs+d+ll*JJ1] = g_updaterate*gld->data[l*Noccs+d+ll*JJ1] + (1.0-g_updaterate)*gg ;
+
+					//theta
 					double nud 	= l-1 !=d ? nu : 0.0;
 					double Wdif	= W_ld->data[l*Noccs+d] - (1.0-1.0/bdur)*W_l0->data[ll*(Noccs+1)+l]- 1.0/bdur*W_l0->data[Noccs+1+l];
 					double surp = chi[l][d]*(1.0+zd) - nud - (1.0-(double)ll)*bl - ((double)ll)*privn +beta*Wdif;
@@ -1129,8 +1095,6 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 							gsl_matrix_set(sol->ss_wld,ll*(Noccs+1)+l,d,
 									(1.0-fm_shr)*(chi[l][d]+beta*W_ld->data[l*Noccs+d])
 									-fm_shr*(-bhere-beta*W_l0->data[l]) -beta*Uw_ld->data[l*Noccs+d]);// put in E[phi]
-							if(gsl_matrix_get(sol->ss_wld,ll*(Noccs+1)+l,d)>chi[l][d])
-								gsl_matrix_set(sol->ss_wld,ll*(Noccs+1)+l,d,chi[l][d]);
 
 					}
 					else
@@ -1142,8 +1106,6 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 							gsl_matrix_set(sol->ss_wld,ll*(Noccs+1)+l,d,
 								(1.0-fm_shr)*(chi[l][d]+beta*W_ld->data[l*Noccs+d])
 								-fm_shr*(-b[1]-beta*W_l0->data[l])-beta*Uw_ld->data[l*Noccs+d]);
-							if(gsl_matrix_get(sol->ss_wld,ll*(Noccs+1)+l,d)>chi[l][d])
-								gsl_matrix_set(sol->ss_wld,ll*(Noccs+1)+l,d,chi[l][d]);
 				}
 
 				double findrt_ld =0.0;
@@ -1171,9 +1133,6 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 			}// for ll=0:1
 
 		}// for l=0:Noccs
-		
-		gsl_integration_workspace_free(integw);
-		
 		for(l=0;l<Noccs+1;l++){
 			for(ll=0;ll<2;ll++){
 				double distW = fabs(lW_l0->data[l*Noccs + ll*(Noccs+1)] - W_l0->data[l*Noccs + ll*(Noccs+1)])/(1.0+lW_l0->data[l*Noccs + ll*(Noccs+1)]);
@@ -1185,11 +1144,10 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 				}
 			}
 		}
-		if(printlev>=2){
-			gsl_matrix_set(m_distg,iter,0,maxdistg);
-			gsl_matrix_set(m_distg,iter,1,sqrt(adistg/JJ1/2));
-			gsl_matrix_set(m_distg,iter,2,maxdistW0);
-		}
+		gsl_matrix_set(m_distg,iter,0,maxdistg);
+		gsl_matrix_set(m_distg,iter,1,sqrt(adistg/JJ1*2));
+		gsl_matrix_set(m_distg,iter,2,maxdistW);
+
 
 		for(l=0;l<Noccs+1;l++){
 			for(ll=0;ll<2;ll++){
@@ -1210,21 +1168,21 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 		// this is actually testing the condition for iteration convergence above
 		if(break_flag ==1)
 			break;
-		else if(maxdistW0 < ss_tol && iter>=10)
+		else if(maxdistg < ss_tol && iter>=10)
 			break_flag=1;
-		else if((fabs(maxdistW0 - lmaxdistW0) < ss_tol) & (maxdistW0< ss_tol*20) & (iter>100)){
+		else if((fabs(maxdistg - lmaxdistg) < ss_tol) & (iter>100)){
 			break_flag=1;
-			//if(verbose>=2) printf("Not making progress in SS from %f\n",maxdistW0);
-			//if(printlev>=1){
-			//	solerr = fopen(soler_f,"a+");
-			//	fprintf(solerr,"SS err stuck at %f\n", maxdistW0);
-			//	fclose(solerr);
-			//}
+			if(verbose>=2) printf("Not making progress in SS from %f\n",maxdistg);
+			if(printlev>=1){
+				solerr = fopen(soler_f,"a+");
+				fprintf(solerr,"SS err stuck at %f\n", maxdistg);
+				fclose(solerr);
+			}
 		}
 
 
 		lmaxdistg = maxdistg;
-		lmaxdistW0= maxdistW0;
+
 		if(printlev>=4){
 			printvec("W_l0_i.csv",W_l0);
 			printvec("W_ld_i.csv",W_ld);
@@ -1389,6 +1347,8 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 	}
 	gsl_eigen_nonsymmv(xtransT, eval, xxmat, w);
 
+//	gsl_eigen_nonsymmv_sort (eval, xxmat, GSL_EIGEN_SORT_ABS_DESC);
+
 	int ii =0;
 	double dist1 = 1.0;
 	gsl_complex eval_l = gsl_vector_complex_get(eval, ii);
@@ -1487,7 +1447,6 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 	gsl_vector_free(gld);
 	gsl_vector_free(sld);
 	gsl_vector_free(ret_d);
-	free(R_dP_ld);
 	gsl_vector_free(lgld);
 	gsl_vector_free(thetald);
 	gsl_matrix_free(pld);
@@ -1871,12 +1830,8 @@ int sys_co_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix*
 	ss_sld_i	= ss_tld_i + Noccs*Nl;
 
 	gsl_vector * ret_d = gsl_vector_calloc(Noccs);
-	gsl_vector * pXret_d = gsl_vector_calloc(Noccs);
-	gsl_vector * pld_d = gsl_vector_calloc(Noccs);
-	double * Vp = malloc((Noccs*2+2)*sizeof(double));
 	status =0;
 	Z = xx->data[0];
-	gsl_integration_workspace * dgwksp = gsl_integration_workspace_alloc (1000);
 
 	// 1st order derivatives
 	for(l=0;l<Noccs+1;l++){
@@ -1898,16 +1853,8 @@ int sys_co_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix*
 				double pld = pmatch(ss->data[ss_tld_i+l*Noccs+d + JJ1*ll]);
 				ret_d->data[d] = (1.0-fm_shr)*(chi[l][d]*(1.0+zd)-bl*(1.0-(double)ll)- privn*((double)ll) +nud+beta*contval)
 						+ bl*(1.0-(double)ll) + privn*((double)ll)+ beta*( (1.0-1.0/bdur)*ss->data[ss_Wl0_i+l +ll*(Noccs+1)]+(1.0/bdur)*ss->data[ss_Wl0_i+l +Noccs+1]);
-				gsl_vector_set(pXret_d,d,gsl_vector_get(ret_d,d)*pld);
-				gsl_vector_set(pld_d,d,pld);
-				gdenom += exp(sig_psi*pXret_d->data[d]);
+				gdenom +=exp(sig_psi*effic*pld*ret_d->data[d]);
 			}
-			// set up Vp for integral to find derivatives of g
-			for(d=0;d<Noccs;d++){
-				Vp[d+2] = gsl_vector_get(pXret_d,d);
-				Vp[d+2+Noccs] = sig_psi*gsl_vector_get(pld_d,d);
-			}
-				
 
 			for(d=0;d<Noccs;d++){
 				zd = xx->data[d+Notz];
@@ -1975,83 +1922,24 @@ int sys_co_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix*
 										1.0/bdur*ss->data[ss_Wl0_i+l+Noccs+1];
 
 					//double ret_d 	= pld*arr_d;
-					// homosked errors: double dgdWld = beta*sig_psi*pld*(1.0-fm_shr)*gld_ss*(1.0-gld_ss);
-					
-					double dgdret[Noccs],dgdreterr;
-					gsl_function dgprob;
-					dgprob.function = dhetero_ev;
-					dgprob.params = Vp;
-					Vp[0] = (double) d;
-					for(dd=0;dd<Noccs;dd++){
-						dgdret[dd]  =0.;
-						double pldd		= pmatch(ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]);
-						double dpldd	= dpmatch(ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]);
-						if(dd!=d){
-						if(ss->data[ss_gld_i+l*Noccs+d]>0.0 && ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]>0.0){
+					double dgdWld = beta*sig_psi*pld*(1.0-fm_shr)*gld_ss*(1.0-gld_ss);
+					if(ret_d->data[d]>0)
+						gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d + ll*JJ1,Wld_i+l*Noccs+d,dgdWld
+								*Wld_ss/gld_ss
+								);
+					else
+						gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d + ll*JJ1,Wld_i+l*Noccs+d,0.0);
+					/*
+					 * dg/dWl0 = 0
+					*/
+					// dg/dt
 
-							Vp[1] = (double) dd;
-							double dgdret_dd;
-							gsl_integration_qags(&dgprob,-20,20,1e-6,1e-6,1000,dgwksp,&dgdret_dd,&dgdreterr);
-							dgdret[dd] = dgdret_dd;
-							
-							//**********************
-							// dgld / dWldd
-							
-							//		dret/dWldd		dg/dret
-							double dgdWld = beta*pldd*(1.0-fm_shr)	*dgdret[dd];
-							
-							if(ret_d->data[dd]>0. && ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]>0.0)
-								gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d + ll*JJ1,Wld_i+l*Noccs+dd,dgdWld
-										*ss->data[ss_Wld_i+l*Noccs+dd]/gld_ss
-										);
-							else
-								gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d + ll*JJ1,Wld_i+l*Noccs+dd,0.0);
-							
-							//**********************
-							// dgld / dtldd
-							//			dret/dtldd		dg/dret
-							double dgdtldd =	dpldd*ret_d->data[dd]	*dgdret[dd];
-							
-							
-							if(ret_d->data[dd]>0.0 && ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]>0.0)
-								gsl_matrix_set(Dco,gld_i+l*Noccs+d+ll*JJ1,tld_i+l*Noccs+dd+ll*JJ1,-1.0*dgdtldd
-									*ss->data[ss_tld_i +l*Noccs+dd+ll*JJ1]/gld_ss
-									);
-							else
-								gsl_matrix_set(Dco,gld_i+l*Noccs+d+ll*JJ1,tld_i+l*Noccs+dd,0.0);
-								
 
-						}
-						else{
-							gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d + ll*JJ1,Wld_i+l*Noccs+dd,0.0);
-							gsl_matrix_set(Dco,gld_i+l*Noccs+d+ll*JJ1,tld_i+l*Noccs+dd,0.0);
-						}//if gld>0 & pld>0
-						}//if dd!=d
-					}//for dd=1:J
-					
-					double dgdret_d = 0.;
-					// computes the derivative w.r.t change in own value (see Bhat 1995 for derivation)
-					for(dd = 0;dd<Noccs;dd++)  dgdret_d += -dgdret[dd];
-					
-					//**********************
-					// dgld / dWld
-					
-					//		dret/dWld		dg/dret
-					double dgdWld = beta*pld*(1.0-fm_shr)	*dgdret_d;
-					
-					gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d + ll*JJ1,Wld_i+l*Noccs+dd,dgdWld
-						*Wld_ss/gld_ss
-						);
-					//**********************
-					// dgld / dWl0 = 0.
-
-					gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d + ll*JJ1,Wl0_i+l,0.0);
-
-					//**********************
-					// dgld / dtld
-					//******************** NOTE: I have ignored the change to the variance of the shock that comes from dg/dt
 					double dpdt = dpmatch(ss->data[ss_tld_i+l*Noccs+d + ll*JJ1]);
-					double dgdt = (dpdt*ret_d->data[d])*dgdret_d;
+					double dgdt =sig_psi*(dpdt*ret_d->data[d]
+					//		- kappa*pow(tld_ss,phi)/(1.0 + pow(tld_ss,phi))
+							)
+							*gld_ss*(1.0-gld_ss);
 					if(tld_ss>0.0 && ret_d->data[d]>0.0)
 						gsl_matrix_set(Dco,gld_i+l*Noccs+d+ll*JJ1,tld_i+l*Noccs+d+ll*JJ1,-1.0*dgdt
 							/gld_ss*tld_ss
@@ -2063,6 +1951,48 @@ int sys_co_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix*
 					gsl_matrix_set(Dco,gld_i+l*Noccs+d+ll*JJ1,tld_i+l*Noccs+d+ll*JJ1,0.0);
 					gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d+ll*JJ1,Wld_i+l*Noccs+d+ll*JJ1,0.0);
 				}//gld_ss>0
+
+				for(dd=0;dd<Noccs;dd++){
+				if(dd!=d){
+					if(ss->data[ss_gld_i+l*Noccs+d]>0.0 && ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]>0.0){
+						double nudd = l==dd+1 ? 0: nu;
+						double zdd = xx->data[dd+Notz];
+						double contval = ss->data[ss_Wld_i+l*Noccs+dd]-(1.0-1.0/bdur)*ss->data[ss_Wl0_i+l+ll*(Noccs+1)]-
+								1.0/bdur*ss->data[ss_Wl0_i+l+Noccs+1];
+						double pldd		= pmatch(ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]);
+						double postdd	=  pldd>0 ? - kappa*ss->data[ss_tld_i+l*Noccs+dd]/pldd : 0.0;
+						double arr_dd 	= (1.0-fm_shr)*(chi[l][dd]*(1.0+zdd)-bl*(1.0-(double)ll) -privn*(double)ll - nudd+beta*contval)
+											+ bl*(1.0-(double)ll) + privn*(double)ll + (1.0-1.0/bdur)*ss->data[ss_Wl0_i+l+ll*(Noccs+1)]+
+											1.0/bdur*ss->data[ss_Wl0_i+l+Noccs+1];
+						//double ret_dd 	= pldd*arr_dd;
+
+						double dpdt		= dpmatch(ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]);
+						double dgdWld	= -pldd*beta*sig_psi*(1.0-fm_shr)
+								*ss->data[ss_gld_i+l*Noccs+dd+ll*JJ1]*ss->data[ss_gld_i+l*Noccs+d+ll*JJ1];
+						if(ret_d->data[dd]>0.0 && ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]>0.0)
+							gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d,Wld_i+l*Noccs+dd,dgdWld
+								/gld_ss*ss->data[ss_Wld_i+l*Noccs+dd]
+								);
+
+						else
+							gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d,Wld_i+l*Noccs+dd,0.0);
+						double dgdtdd = -sig_psi*(dpdt*ret_d->data[dd]
+							//	-kappa*pow(ss->data[ss_tld_i+l*Noccs+dd],phi)/(1.0 + pow(ss->data[ss_tld_i+l*Noccs+dd],phi))
+								)
+								*gld_ss*ss->data[ss_gld_i+l*Noccs+dd];
+						if(ret_d->data[dd]>0.0 && ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]>0.0)
+							gsl_matrix_set(Dco,gld_i+l*Noccs+d+ll*JJ1,tld_i+l*Noccs+dd+ll*JJ1,-1.0*dgdtdd
+								*ss->data[ss_tld_i +l*Noccs+dd+ll*JJ1]/gld_ss
+								);
+						else
+							gsl_matrix_set(Dco,gld_i+l*Noccs+d+ll*JJ1,tld_i+l*Noccs+dd,0.0);
+					} //gld_ss >0
+					else{
+						gsl_matrix_set(Dco,gld_i+l*Noccs+d,tld_i+l*Noccs+dd+ll*JJ1,0.0);
+						gsl_matrix_set(Dst_tp1,gld_i+l*Noccs+d,Wld_i+l*Noccs+dd+ll*JJ1,0.0);
+					}
+				}//if dd!=d
+				}//for dd=1:J
 
 				// sld
 				if(ll==0){//only need to do this once!
@@ -2087,11 +2017,8 @@ int sys_co_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix*
 			}// for d=1:Noccs+1
 		}//for ll=1:2
 	}// for l=1:Noccs+1
-	free(Vp);
+
 	gsl_vector_free(ret_d);
-	gsl_vector_free(pXret_d);
-	gsl_vector_free(pld_d);
-	gsl_integration_workspace_free(dgwksp);
 	return status;
 }
 
@@ -2344,8 +2271,8 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 	int init_T = 200, l,d;
 	int di,estiter,status =0,maxestiter=15;
 
-	gsl_matrix * x		= gsl_matrix_alloc(Noccs+1,Noccs+2);
-	gsl_matrix * xp		= gsl_matrix_alloc(Noccs+1,Noccs+2);
+	gsl_matrix * x		= gsl_matrix_alloc(Noccs+1,Noccs+1);
+	gsl_matrix * xp		= gsl_matrix_alloc(Noccs+1,Noccs+1);
 	gsl_matrix * tzhist	= gsl_matrix_alloc(simT,Noccs);
 	gsl_matrix * zhist	= gsl_matrix_alloc(simT,Noccs);
 	gsl_matrix * zhist0 = gsl_matrix_alloc(simT,Noccs);
@@ -2897,7 +2824,7 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 
 	 	if((st->cal_set<=0 || st->cal_set==2)&& d_chng>1e-4){
 		// do a regression on the changes in wages:
-		// only look at experienced changers
+		// only look at experienced changers, and set chi[0][d] s.t. makes the avg wage loss match
 			int Xrow =0;
 			gsl_matrix_set_zero(Wt);
 
@@ -3107,7 +3034,7 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 	gsl_matrix_free(sol->sld);
 		sol->sld=NULL;
 
-	for(l=0;l<Nl;l++)
+	for(l=0;l<Noccs+1;l++)
 		free(pld[l]);
 	free(pld);
 	gsl_matrix_free(Wt);
@@ -3118,7 +3045,6 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 	gsl_vector_free(er);
 	if(printlev>=2){
 		gsl_vector_free(s_mom.Ft);
-		gsl_vector_free(s_mom.Ft_occ);
 		gsl_vector_free(s_mom.xFt);
 		gsl_vector_free(s_mom.dur_hist);
 		gsl_matrix_free(s_mom.dur_l_hist);
@@ -3139,13 +3065,11 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 		gsl_matrix_free(tll_hist);
 		gsl_matrix_free(tld_hist);
 		gsl_matrix_free(x_u_hist);
-		gsl_matrix_free(urt_l_wt);
 	}
 	gsl_matrix_free(x);
 	gsl_matrix_free(xp);
 	gsl_vector_free(Zz);
 	gsl_matrix_free(wld);
-
 	return status;
 }
 
@@ -3286,8 +3210,8 @@ int TGR(struct st_wr * st){
 	status	= 0;
 	Tmo 	= 24;
 	int Ndraw = (st->sim->draws->size1)/Tmo;
-	gsl_matrix * xp = gsl_matrix_calloc(Noccs+1,Noccs+2);
-	gsl_matrix * x = gsl_matrix_calloc(Noccs+1,Noccs+2);
+	gsl_matrix * xp = gsl_matrix_calloc(Noccs+1,Noccs+1);
+	gsl_matrix * x = gsl_matrix_calloc(Noccs+1,Noccs+1);
 	gsl_matrix * r_occ_wr = gsl_matrix_alloc(9416,7);
 	gsl_vector * Zz_2008 	= gsl_vector_alloc(Nx);
 	gsl_vector * Zz_2009 	= gsl_vector_alloc(Nx);
@@ -3617,12 +3541,12 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 	int Nl 	= 2*(Noccs+1);
 	int Wl0_i = 0;
 	int Wld_i = Wl0_i + Nl;
-	int ss_gld_i,ss_Wld_i,ss_Wl0_i;
-		// indices where these things are
+	int ss_gld_i,ss_tld_i, ss_Wld_i,ss_Wl0_i;
+
 		ss_Wl0_i	= 0;//ss_x_i + pow(Noccs+1,2);
 		ss_Wld_i	= ss_Wl0_i + Nl;
 		ss_gld_i	= ss_Wld_i + JJ1;
-
+		ss_tld_i	= ss_gld_i + 2*JJ1;
 
 	double *gld_l 	= malloc(sizeof(double)*Noccs);
 
@@ -3871,7 +3795,6 @@ int xprime(gsl_matrix * xp, gsl_vector * ss, const struct sys_coef * sys, const 
 	}
 	else
 		sld = sol->sld;
-
 	if(printlev>=2){
 		urt = 0.0;
 		for(l=0;l<Noccs+1;l++){
@@ -3897,13 +3820,13 @@ int xprime(gsl_matrix * xp, gsl_vector * ss, const struct sys_coef * sys, const 
 			ald[ll*(Noccs+1)][d] = gsl_matrix_get(gld,ll*(Noccs+1),d)*(gsl_matrix_get(x,0,ll*(Noccs+1)) + (1.0-(double)ll)*newdisp);
 	}
 	for(l=1;l<Noccs+1;l++){
-		double newexp = 0.0;
+		double sxpjl = 0.0;
 		for(j=0;j<Noccs+1;j++)
-			newexp =j!=l? tau*gsl_matrix_get(x,j,l)+newexp : newexp;
+			sxpjl =j!=l? gsl_matrix_get(x,j,l)+sxpjl : sxpjl;
 		for(ll=0;ll<2;ll++){
 			for(d=0;d<Noccs;d++)
 				ald[ll*(Noccs+1)+l][d] = gsl_matrix_get(gld,l+ll*(Noccs+1),d)*(gsl_matrix_get(x,l,ll*(Noccs+1)) +
-						(1.0-(double)ll)*gsl_matrix_get(sld,l,l-1)*(gsl_matrix_get(x,l,l)+newexp) );
+						(1.0-(double)ll)*gsl_matrix_get(sld,l,l-1)*(gsl_matrix_get(x,l,l)+tau*sxpjl) );
 		}
 	}
 	for(l=0;l<Nl;l++){
@@ -3928,11 +3851,11 @@ int xprime(gsl_matrix * xp, gsl_vector * ss, const struct sys_coef * sys, const 
 		);
 	//xl0
 	for(l=1;l<Noccs+1;l++){
-		double newexp = 0.0;
+		double sxpjl = 0.0;
 		for(j=0;j<Noccs+1;j++)
-			newexp =j!=l? tau*gsl_matrix_get(x,j,l)+newexp : newexp;
+			sxpjl =j!=l? gsl_matrix_get(x,j,l)+sxpjl : sxpjl;
 		gsl_matrix_set(xp,l,0,
-				(1.0-findrt[l])*(gsl_matrix_get(x,l,0)*(1.0-1.0/bdur) + gsl_matrix_get(sld,l,l-1)*(gsl_matrix_get(x,l,l) + newexp))
+				(1.0-findrt[l])*(gsl_matrix_get(x,l,0)*(1.0-1.0/bdur) + gsl_matrix_get(sld,l,l-1)*(gsl_matrix_get(x,l,l) + tau*sxpjl))
 				);
 		gsl_matrix_set(xp,l,Noccs+1,
 				(1.0-findrt[l+Noccs+1])*gsl_matrix_get(x,l,Noccs+1) + 1.0/bdur*(1.0-findrt[l])*gsl_matrix_get(x,l,0)
@@ -3983,7 +3906,7 @@ int xprime(gsl_matrix * xp, gsl_vector * ss, const struct sys_coef * sys, const 
 		free(ald[l]);
 	free(ald);
 	free(findrt);
-	for(l=0;l<Nl;l++)
+	for(l=0;l<Noccs+1;l++)
 		free(pld[l]);
 	free(pld);
 	if(sol->tld==0)
@@ -4390,7 +4313,6 @@ int free_econ(struct st_wr * st){
 	free(st->sys);
 	free(st->sol);
 	free(st->sim);
-	free((st->sys)->COV);
 
 	return status;
 }
@@ -4456,46 +4378,6 @@ double dinvq(const double q){
 	dt = pow(effic/q,phi)-1.0;
 	dt = dt> 0.0 ? -1.0*pow(dt,1.0/phi-1.0)*pow(effic,phi)*pow(q,-phi-1.0) : 0.0;
 	return dt;
-}
-
-
-double hetero_ev(double eps, void * Vp_in){
-	int i,j, pj;
-	// Vp has Noccs*2 + 1 values.  The first value is the index of the probability we're choosing (i) and the rest are the Values and then the scale parameters
-	double intval;
-	double * Vp = (double*) Vp_in;
-	
-	intval = 0;
-	i = (int) Vp[0];
-	for(j=0;j<Noccs;j++){
-		pj = j+1+Noccs;
-		intval = Vp[pj] > 0. && Vp[j+1] > 0. ?
-			exp( -(Vp[i+1] - Vp[j+1] + eps*Vp[i+1+Noccs])/Vp[pj] ) + intval 
-			: intval;
-	}
-	intval = exp(-intval)*exp(-eps);
-	return intval;
-}
-
-
-double dhetero_ev(double eps, void * Vp_in){
-	int i,j,k, pj;
-	// Vp has Noccs*2 + 2 values.  The first value is the index of the probability we're choosing and the rest are the Values and then the scale parameters
-	double intval;
-	double * Vp = (double*) Vp_in;
-	
-	intval = 0;
-	i = (int) Vp[0];
-	k = (int) Vp[1];
-	for(j=0;j<Noccs;j++){
-		pj = j+2+Noccs;
-		intval = Vp[pj] > 0. && Vp[j+1] > 0. ?
-			exp( -(Vp[i+2] - Vp[j+2] + eps*Vp[i+2+Noccs])/Vp[pj] ) + intval 
-			: intval;
-	}
-	intval = exp(-intval)*exp(-eps);
-	intval *= -1./Vp[k+2+Noccs]*exp(-(Vp[i+2]-Vp[k+2]-eps*Vp[i+2+Noccs])/Vp[k+2+Noccs] );
-	return intval;
 }
 
 int VARest(gsl_matrix * X,gsl_matrix * coef, gsl_matrix * varcov){
@@ -4704,7 +4586,6 @@ double bndCalMinwrap(double (*Vobj)(unsigned n, const double *x, double *grad, v
 	nlopt_set_ftol_rel(opt0, f_tol);
 	nlopt_set_ftol_abs(opt0, f_tol); // because function value should be approaching zero, need to set this
 	nlopt_set_maxeval(opt0, 200*pow(n,2));
-	//nlopt_set_maxeval(opt0, 1);
 	nlopt_set_stopval(opt0, 0.0);
 	nlopt_set_lower_bounds(opt0,lb);
 	nlopt_set_upper_bounds(opt0,ub);
@@ -5068,7 +4949,7 @@ int set_params(const double * x, int cal_set){
 			}
 		}
 		double chi_lb = 0.5;
-		double chi_ub = 0.9;
+		double chi_ub = 0.80;
 		for(l=1;l<Noccs+1;l++){
 			for(d=0;d<Noccs;d++){
 				if(l!=d+1){
@@ -5222,7 +5103,7 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 	int alg = nlopt_get_algorithm(st->opt0);
 	if(exploding>=5 && alg<100)
 		nlopt_force_stop(st->opt0);
-	if(Nsolerr>2 || ((dist>1000 && Nsolerr>1 )  && alg<100))
+	if(Nsolerr>2 || (dist>1000 && Nsolerr>1 )  && alg<100)
 		nlopt_force_stop(st->opt0);
 
 

@@ -516,8 +516,9 @@ void printvec(char* name, gsl_vector* vec){
 }
 
 int readmat(char* name, gsl_matrix * mat){
-	int status,Nr,Nc,r,c,rstatus;
-
+	int status,Nr,Nc,r,c,rstatus,trashstatus;
+	double trash;
+	
 	Nc = (int) mat->size2;
 	Nr = (int) mat->size1;
 	status =0;
@@ -534,16 +535,35 @@ int readmat(char* name, gsl_matrix * mat){
 			for(c=0;c<Nc-1;c++){
 				rstatus = fscanf(f,"%lf,",&dd);
 				if(rstatus==0){
-					printf("Error, did not read from %s\n",name);
+					rstatus = fscanf(f,"%lf\n",&dd);
 				}
+				if(rstatus==0)
+					printf("Error, did not read from %s\n",name);
+
 				gsl_matrix_set(mat,r,c,(double) dd);
+				
 			}			
 			rstatus = fscanf(f,"%lf\n",&dd);
+			/* if this doesn't work, then keep reading --- This does not work
 			if(rstatus==0){
+				rstatus = fscanf(f,"%lf,",&dd);
+				if(rstatus>0){// it wasn't the end of the line, so now read until the end of the line
+					for(c=0;c<100;c++){
+						trashstatus = fscanf(f,"%lf,",&trash);
+						if(trashstatus ==0){
+							trashstatus = fscanf(f,"%lf\n",&trash);
+							break; //came to the end
+						}
+					}
+				}
+			}*/
+			if(rstatus==0)
 				printf("Error, did not read from %s\n",name);
-			}
+
 			gsl_matrix_set(mat,r,Nc-1,dd);
 		}
+		
+
 		fclose(f);
 	}
 	return status;
