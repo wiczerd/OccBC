@@ -2121,7 +2121,12 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 	ss_sld_i	= ss_tld_i + Noccs*Nl;
 
 	status =0;
+	double * Vp = malloc((Noccs*2+2)*sizeof(double));
+	double * ret_d = malloc(Noccs*sizeof(double));
+	double * pld = malloc(Noccs*sizeof(double));
+	gsl_integration_workspace * dgwksp = gsl_integration_workspace_alloc (1000);
 
+	ret_d = 0;
 	for (l=0;l<Noccs+1;l++){
 		double bl = l>0 ? b[1]:b[0];
 		for(ll=0;ll<2;ll++){
@@ -2129,16 +2134,23 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 			double gdenom = 0.0;
 			for(d=0;d<Noccs;d++){
 				int ss_tldldll = ss_tld_i+l*Noccs+d + JJ1*ll;
-				double pld 	= pmatch(ss->data[ss_tldldll]);
+				double pld[d]	= pmatch(ss->data[ss_tldldll]);
 				double post	= pld>0 ? - kappa*ss->data[ss_tld_i+l*Noccs+d + JJ1*ll]/pld : 0.0;
 				double nud 	= l ==d+1? 0.0 : nu;
-				double ret_d= (1.0-fm_shr)*(chi[l][d]-bl*(1.0-(double)ll) -privn*(double)ll- nud +
+				double ret_d[d]= (1.0-fm_shr)*(chi[l][d]-bl*(1.0-(double)ll) -privn*(double)ll- nud +
 						beta*(ss->data[ss_Wld_i+l*Noccs+d]-ss->data[ss_Wl0_i+l]))
 									+bl*(1.0-(double)ll) + privn*((double)ll)+ss->data[ss_Wl0_i+l];
-				ret_d 		= ret_d <0.0 ? 0.0 : ret_d;
-				gdenom +=exp(sig_psi*pld*ret_d);
+				ret_d[d]	= ret_d[d] <0.0 ? 0.0 : ret_d[d];
+				gdenom +=exp(sig_psi*pld*ret_d[d]);
 			}
 			double dWl0dZ =0.0;
+			for(d=0;d<Noccs;d++){
+				Vp[d+2] = pld[d]*ret[d];
+				Vp[d+2+Noccs] = sig_psi*pld[d];
+			}
+				
+			
+			
 			for(d=0;d<Noccs;d++)
 				dWl0dZ += ss->data[ss_gld_i+l*Noccs+d]*chi[l][d]*(1.0-fm_shr)*pmatch(ss->data[ss_tld_i+l*Noccs+d+ JJ1*ll]);
 		//	gsl_matrix_set(Dst,Wl0_i+l,0,dWl0dZ
@@ -2207,8 +2219,11 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 					//contval	= contval>0.0? contval : 0.0;
 					//double ret_d 	= (1.0-fm_shr)*(chi[l][d] -bl - nud +beta*contval)
 					//						+bl + ss->data[ss_Wl0_i+l];
-
-					double dgdzd =sig_psi*pld*(1.0-fm_shr)*chi[l][d]*ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]*(1.0-ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]);
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// EDIT HERE!!!!
+					double dgdzd =pld*(1.0-fm_shr)*chi[l][d]*ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]*(1.0-ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]);
 					gsl_matrix_set(Dco,gld_i+l*Noccs+d+ ll*JJ1,d+Notz,dgdzd
 						/ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]
 						);
@@ -2258,6 +2273,11 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 		}//for ll=0:1
 	}//for l=1:Noccs+1
 
+
+	free(Vp);
+	free(ret_d);
+	free(pld);
+	gsl_integration_workspace_free(dgwksp);
 	return status;
 }
 
