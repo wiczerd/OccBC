@@ -846,10 +846,9 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 	gsl_vector 	* W_l0,*W_ld, *lW_l0;
 	gsl_vector 	* Uw_ld;
 	gsl_vector 	* gld,*lgld,*thetald,*findrt, *sld;
-	gsl_vector 	* ret_d;
 	gsl_matrix 	* m_distg; //max dist g, ave dist g, max dist W0
 	gsl_matrix 	* pld,*x;//,*lx;
-	double 		* R_dP_ld = malloc((Noccs*2+1)*sizeof(double));
+
 	if(Zz == NULL){
 		Zz = gsl_vector_calloc(Nx);
 		allocZz = 1;
@@ -864,7 +863,6 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 	W_ld 	= gsl_vector_calloc(JJ1);
 	Uw_ld 	= gsl_vector_calloc(JJ1*2);
 	gld 	= gsl_vector_calloc(2*JJ1);
-	ret_d	= gsl_vector_calloc(Noccs);
 	lgld 	= gsl_vector_calloc(gld->size);
 	thetald	= gsl_vector_calloc(2*JJ1);
 	findrt 	= gsl_vector_calloc(2*(Noccs+1));
@@ -1008,14 +1006,15 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 
 		maxdistg = 0.0;
 		gsl_vector_memcpy(lgld,gld);
-		gsl_integration_workspace * integw =
-				gsl_integration_workspace_alloc(1000);
+
 		//either make ret_d local, private or do not parallelize
-		//#pragma omp parallel for default(shared) private(d,l,dd,ret_d)
+		#pragma omp parallel for default(shared) private(d,ll,l,dd)
 		for(l=0;l<Noccs+1;l++){
 			double bl = l>0 ? b[1]:b[0];
 			for(ll=0;ll<2;ll++){
-
+				gsl_integration_workspace * integw = gsl_integration_workspace_alloc(1000);
+				gsl_vector 	* ret_d = gsl_vector_calloc(Noccs);
+				double 		* R_dP_ld = malloc((Noccs*2+1)*sizeof(double));
 				for(d=0;d<Noccs;d++){
 					double zd = Zz->data[d+Notz];
 					double nud = l == d+1? 0:nu;
@@ -1168,11 +1167,14 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 
 				if(distW0 > maxdistW0)
 					maxdistW0 = distW0;
+					
+				// free d-specific things
+				gsl_vector_free(ret_d);
+				free(R_dP_ld);
+				gsl_integration_workspace_free(integw);
 			}// for ll=0:1
 
 		}// for l=0:Noccs
-		
-		gsl_integration_workspace_free(integw);
 		
 		for(l=0;l<Noccs+1;l++){
 			for(ll=0;ll<2;ll++){
@@ -1486,8 +1488,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 	gsl_matrix_free(x);
 	gsl_vector_free(gld);
 	gsl_vector_free(sld);
-	gsl_vector_free(ret_d);
-	free(R_dP_ld);
+
 	gsl_vector_free(lgld);
 	gsl_vector_free(thetald);
 	gsl_matrix_free(pld);
@@ -1984,10 +1985,11 @@ int sys_co_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix*
 					Vp[0] = (double) d;
 					for(dd=0;dd<Noccs;dd++){
 						dgdret[dd]  =0.;
-						double pldd		= pmatch(ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]);
+						double pldd	= pmatch(ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]);
 						double dpldd	= dpmatch(ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]);
 						if(dd!=d){
-						if(ss->data[ss_gld_i+l*Noccs+d]>0.0 && ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]>0.0){
+						if(ss->data[ss_gld_i+l*Noccs+d]>1.0e-4 && ss->data[ss_gld_i+l*Noccs+dd+ll*JJ1]>1.0e-3
+							&& ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]>1.0e-4){
 
 							Vp[1] = (double) dd;
 							double dgdret_dd;
@@ -2126,26 +2128,26 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 	double * pld = malloc(Noccs*sizeof(double));
 	gsl_integration_workspace * dgwksp = gsl_integration_workspace_alloc (1000);
 
-	ret_d = 0;
+	
 	for (l=0;l<Noccs+1;l++){
 		double bl = l>0 ? b[1]:b[0];
 		for(ll=0;ll<2;ll++){
-
+			
 			double gdenom = 0.0;
 			for(d=0;d<Noccs;d++){
 				int ss_tldldll = ss_tld_i+l*Noccs+d + JJ1*ll;
-				double pld[d]	= pmatch(ss->data[ss_tldldll]);
-				double post	= pld>0 ? - kappa*ss->data[ss_tld_i+l*Noccs+d + JJ1*ll]/pld : 0.0;
+				pld[d]	= pmatch(ss->data[ss_tldldll]);
+				double post	= pld[d]>0 ? - kappa*ss->data[ss_tld_i+l*Noccs+d + JJ1*ll]/pld[d] : 0.0;
 				double nud 	= l ==d+1? 0.0 : nu;
-				double ret_d[d]= (1.0-fm_shr)*(chi[l][d]-bl*(1.0-(double)ll) -privn*(double)ll- nud +
+				ret_d[d]= (1.0-fm_shr)*(chi[l][d]-bl*(1.0-(double)ll) -privn*(double)ll- nud +
 						beta*(ss->data[ss_Wld_i+l*Noccs+d]-ss->data[ss_Wl0_i+l]))
 									+bl*(1.0-(double)ll) + privn*((double)ll)+ss->data[ss_Wl0_i+l];
 				ret_d[d]	= ret_d[d] <0.0 ? 0.0 : ret_d[d];
-				gdenom +=exp(sig_psi*pld*ret_d[d]);
+				gdenom +=exp(sig_psi*pld[d]*ret_d[d]);
 			}
 			double dWl0dZ =0.0;
 			for(d=0;d<Noccs;d++){
-				Vp[d+2] = pld[d]*ret[d];
+				Vp[d+2] = pld[d]*ret_d[d];
 				Vp[d+2+Noccs] = sig_psi*pld[d];
 			}
 				
@@ -2156,13 +2158,14 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 		//	gsl_matrix_set(Dst,Wl0_i+l,0,dWl0dZ
 		//			/ss->data[ss_Wl0_i+l]
 		//			);
+
+
 			for(d=0;d<Noccs;d++){
 
 				double nud = l ==d+1? 0.0 : nu;
-				double pld 	= pmatch(ss->data[ss_tld_i+l*Noccs+d + ll*JJ1]);
-				double post	= pld>0 ? - kappa*ss->data[ss_tld_i+l*Noccs+d + ll*JJ1]/pld : 0.0;
+				double post	= pld[d]>0 ? - kappa*ss->data[ss_tld_i+l*Noccs+d + ll*JJ1]/pld[d] : 0.0;
 									// dWl0/dz
-				double dWdz =ss->data[ss_gld_i+l*Noccs+d + ll*JJ1]*(1.0-fm_shr)*chi[l][d]*pld;
+				double dWdz =ss->data[ss_gld_i+l*Noccs+d + ll*JJ1]*(1.0-fm_shr)*chi[l][d]*pld[d];
 
 				gsl_matrix_set(Dst,Wl0_i+l+ll*(Noccs+1),d+Notz,dWdz
 						/ss->data[ss_Wl0_i+l + ll*(Noccs+1)]
@@ -2196,12 +2199,12 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 					if(l!=d+1){
 						// dWld/dZ
 						double dWlddZ =(1.0- ss->data[ss_sld_i + l*Noccs+d])*(1.0-tau)*chi[l][d]+
-										(1.0-ss->data[ss_sld_i + (d+1)*Noccs+d])*tau*chi[d+1][d];
+							(1.0-ss->data[ss_sld_i + (d+1)*Noccs+d])*tau*chi[d+1][d];
 						double dWlddzd =((1.0-ss->data[ss_sld_i + l*Noccs+d])*(1.0-tau)*chi[l][d]+
-								(1.0-ss->data[ss_sld_i + (d+1)*Noccs+d])*tau*chi[d+1][d]) ;
+							(1.0-ss->data[ss_sld_i + (d+1)*Noccs+d])*tau*chi[d+1][d]) ;
 						gsl_matrix_set(Dst,Wld_i + l*Noccs+d,d+Notz,dWlddzd
-								/ss->data[ss_Wld_i+l*Noccs+d]
-								);
+							/ss->data[ss_Wld_i+l*Noccs+d]
+							);
 					}
 					else{
 
@@ -2213,25 +2216,54 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 				}// Wld, tld_ss >0
 
 				// gld
+				double dgdret[Noccs];
+				gsl_function dgprob;
+				dgprob.function = dhetero_ev;
+				dgprob.params = Vp;
 				if(ss->data[ss_gld_i+l*Noccs+d + ll*JJ1]>0.0 && ss->data[ss_tld_i+l*Noccs+d+ ll*JJ1]>0.0){
 					double contval  = (ss->data[ss_Wld_i+l*Noccs+d]-(1.0-1.0/bdur)*ss->data[ss_Wl0_i+l + ll*(Noccs+1)] -
 							1.0/bdur*ss->data[ss_Wl0_i+l + Noccs+1]);
-					//contval	= contval>0.0? contval : 0.0;
-					//double ret_d 	= (1.0-fm_shr)*(chi[l][d] -bl - nud +beta*contval)
-					//						+bl + ss->data[ss_Wl0_i+l];
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// EDIT HERE!!!!
-					double dgdzd =pld*(1.0-fm_shr)*chi[l][d]*ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]*(1.0-ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]);
+					for(dd=0;dd<Noccs;dd++){
+						dgdret[dd]  =0.;
+						double pldd	= pmatch(ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]);
+						double dpldd	= dpmatch(ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]);
+						if(dd!=d){
+						if(ss->data[ss_gld_i+l*Noccs+d]>1.e-4 && ss->data[ss_gld_i+l*Noccs+dd+ll*JJ1]>1.e-3
+						&& ss->data[ss_tld_i+l*Noccs+dd+ll*JJ1]>1.e-4){
+							Vp[1] = (double) dd;
+							
+							double dgdret_dd, dgdreterr;
+							gsl_integration_qags(&dgprob,-20,20,1e-6,1e-6,1000,dgwksp,&dgdret_dd,&dgdreterr);
+							dgdret[dd] = dgdret_dd;
+
+							double dgdzdd = pldd*(1.-fm_shr)*chi[l][dd]*dgdret_dd;
+							gsl_matrix_set(Dco,gld_i+l*Noccs+d+ ll*JJ1,dd+Notz,dgdzdd
+								/ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]
+								);
+							
+						}else
+							gsl_matrix_set(Dco,gld_i+l*Noccs+d+ ll*JJ1,dd+Notz,0.);
+						}
+					}
+					double dgdzd = 0.;
+					for(d=0;d<Noccs;d++) dgdzd += -dgdret[d];
+					dgdzd *= pld[d]*(1.-fm_shr)*chi[l][d];
 					gsl_matrix_set(Dco,gld_i+l*Noccs+d+ ll*JJ1,d+Notz,dgdzd
 						/ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]
 						);
+
+					// homog dgdzd:
+					//double dgdzd =pld*(1.0-fm_shr)*chi[l][d]*ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]*(1.0-ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]);
+					//gsl_matrix_set(Dco,gld_i+l*Noccs+d+ ll*JJ1,d+Notz,dgdzd
+					//	/ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]
+					//	);
 				}
 				else{
 					gsl_matrix_set(Dco,gld_i+l*Noccs+d,d+Notz,0.0);
+					for(dd=0;dd<Noccs;dd++) gsl_matrix_set(Dco,gld_i+l*Noccs+d+ ll*JJ1,dd+Notz,0.);
 				}
-				for(dd=0;dd<Noccs;dd++){
+				/* homog dgdzdd
+				 * for(dd=0;dd<Noccs;dd++){
 				if(dd!=d){
 					if(ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]>0.0 && ss->data[ss_tld_i+l*Noccs+dd+ ll*JJ1]>0.0){
 						double nudd 	= l==dd+1 ? 0: nu;
@@ -2252,7 +2284,7 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 					else
 						gsl_matrix_set(Dco,gld_i+l*Noccs+d + ll*JJ1,dd+Notz,0.0);
 				}
-				}
+				}*/
 
 				// sld
 				double cut 	= ss->data[ss_Wl0_i+l]-chi[l][d]-beta*ss->data[ss_Wld_i +l*Noccs+d];
