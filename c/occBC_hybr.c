@@ -54,12 +54,12 @@ int verbose 	= 3;
 int printlev 	= 3;
 int rescale_var	= 0;
 int check_fin	= 0;
-int use_anal	= 1;
+int use_anal	= 1; // this governs whether the perturbation uses analytic derivatives
 int fix_fac		= 1; // this allows f_t to be free when estimating.  o.w. the path of f_t, gamma and var_eta are fixed.
 int opt_alg		= 3; // 10x => Nelder-Meade, 5x => Subplex, 3x => DFBOLS, o.w => BOBYQA
 int polish_alg	= 0;
-double ss_tol	= 1e-8; // tighten this with iterations?
-double dyn_tol	= 1e-8; // ditto?
+double ss_tol	= 1e-7; // tighten this with iterations?
+double dyn_tol	= 1e-7; // ditto?
 int homosk_zeta	= 0;
 int diag_zeta	= 1;
 int gsl_fin_diffs=0;
@@ -138,7 +138,7 @@ double avg_sdsep= 0.01256;	//the average standard deviation of sld across occupa
 double med_dr	= 13;
 double chng_pr	= 0.45;
 
-double sk_wg[]	= {-.364435,-.2963078,-.0504365};// before Fatih's comments: {-0.330679,-0.2942328,-0.185577};
+double sk_wg[]	= {-.364435,-.2963078,-.0504365};
 double Zfcoef[] = {0.0233,-0.0117};
 			// old : {-0.0028,-0.0089,0.0355,0.0083};
 
@@ -228,7 +228,6 @@ int TGR(//gsl_vector* u_dur_dist, gsl_vector* opt_dur_dist, gsl_vector * fnd_dis
 double fr00, frdd; // THIS IS REALLY BAD PROGRAMMING
 
 // Utilities
-
 int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats);
 int Es_dyn(gsl_vector * Es, const gsl_vector * ss_W, const gsl_vector * Wlast ,const gsl_matrix * invP0P1, const gsl_matrix * invP0P2, const gsl_vector * Zz);
 int Es_cal(gsl_vector * Es, const gsl_vector * ss_W, const gsl_matrix * PP, const gsl_vector * Zz);
@@ -259,6 +258,7 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params);
 int cal_dist_wrap(const gsl_vector * x, void* params, gsl_vector * f);
 void dfovec_iface_(double * f, double * x, int * n);
 
+/*
 double quad_solve(unsigned n, const double *x, double *grad, void*params){
 	// to test the multi-start
 	int i;
@@ -266,7 +266,7 @@ double quad_solve(unsigned n, const double *x, double *grad, void*params){
 	for(i=0;i<n;i++)
 		obj+= (double)(i+1) * pow(x[i],2);
 	return obj;
-}
+}*/
 
 int main(int argc,char *argv[]){
 	// pass 0 to calibrate the whole thing, 1 for just calibration, 2 for wage parameters and 3+ for whole thing.
@@ -366,6 +366,9 @@ int main(int argc,char *argv[]){
 		printmat("readLambda.csv",LambdaCoef);
 	}
 
+	//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	// TAKE THIS OUT
+	// REPLACE WITH FINDING RATE SERIES
 	// read the matrix of occupation, industry weights
 	pdf_occind = gsl_matrix_calloc(Noccs,Nind);
 	readmat("pdf_occind.csv", pdf_occind);
@@ -2659,11 +2662,9 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 	gsl_vector * coefs_di	= gsl_vector_calloc(Nskill + 1);
 	gsl_vector * er = gsl_vector_alloc(yloss->size);
 
-	// Take a draw for Zz and initialize things
+	// Take a draw for Zz and initialize things for init_T periods
 	int init_T = 200;
-
 	gsl_vector_view Zdraw = gsl_matrix_row(simdat->draws,0);
-
 	gsl_blas_dgemv (CblasNoTrans, 1.0, sys->S, &Zdraw.vector, 0.0, Zz);
 	if(printlev>=3)
 		printvec("Zdraws.csv",&Zdraw.vector);
@@ -2897,13 +2898,6 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 		}
 		d_chng += d_chng_0*x_u->data[0];
 
-		/*double max0 = 0.0;
-		for(d=0;d<Noccs;d++)
-			max0 = (gsl_matrix_get(sol->gld,0,d)*effic*pow(gsl_matrix_get(sol->tld,0,d),1.0-phi))>max0 ?
-					(gsl_matrix_get(sol->gld,0,d)*effic*pow(gsl_matrix_get(sol->tld,0,d),1.0-phi)):max0;
-		d_chng += (1.0-max0/fnd_l->data[0])*x_u->data[0];
-		*/
-		//d_chng /= (1.0 - x_u->data[0]);
 		d_chng = gsl_finite(d_chng)==0 ? s_chng*fac_ave : d_chng;
 		s_chng +=d_chng/(double)Ndraw;
 
@@ -2955,8 +2949,9 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 			for(l=1;l<Nl;l++){
 				for(d=0;d<Noccs;d++){
 					if(l!=d+1 && l-(Noccs+1)!=d ){
+						// the loss is a result from solving it
 						double ylossld = log(gsl_matrix_get(sol->ss_wld,l,d)/gsl_matrix_get(sol->ss_wld,d+1,d));
-
+						// the fraction doing it
 						double wgt = pld[l][d]*gsl_matrix_get(sol->gld,l,d)*x_u->data[l]/(1.0-x_u->data[0])/d_chng;
 						if(gsl_finite(ylossld) && ylossld<0.0 && wgt>1e-5 && gsl_finite(wgt)){
 							gsl_matrix_set(Wt,Xrow,Xrow,wgt);
@@ -3216,10 +3211,10 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 
 	gsl_vector_set_zero(s_mom->Ft);
 
-	for(duri =0;duri <5;duri ++){
-		double Ft_ld = 0.0;
-		double xt_ld = 0.0;
-		double Ft_occ = 0.0;
+	for(duri =0;duri <5;duri ++){ // loop over each value of vector durs
+		double Ft_ld = 0.0; // finding rate in each direction
+		double xt_ld = 0.0; // number in each direction
+		double Ft_occ = 0.0; // overall finding rate
 		double xt_occ = 0.0;
 		for(t=0;t<Ndraw;t++){
 			for(l=0;l<Noccs+1;l++){
@@ -3240,7 +3235,8 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 		gsl_vector_set(s_mom->Ft,duri,Ft_ld);
 		gsl_vector_set(s_mom->xFt,duri,xt_ld);
 		gsl_vector_set(s_mom->Ft_occ,duri,Ft_occ);
-	}
+	}// for duri in durs
+
 	for(t=0;t<Ndraw;t++){
 		double d_dur = 0.0;
 		for(l=0;l<Noccs+1;l++){
@@ -3708,7 +3704,7 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 			for(d=0;d<Noccs;d++){
 				double nud = l == d+1? 0. : nu;
 				double zd 	= Zz->data[d+Notz];
-				//double post = -kappa*gsl_matrix_get(sol->tld,l,d)/gsl_matrix_get(pld,l,d);
+
 				double cont	= Es->data[Wld_i + l*Noccs+d] - (1.-1./bdur)*Es->data[Wl0_i + l+ll*(Noccs+1)] - 1./bdur*Es->data[Wl0_i + l+Noccs+1];
 
 				ret_d[d]	= (1.-fm_shr)*(chi[l][d]*(1. + zd) - bl*(1.-(double)ll) - privn*(double)ll - nud + beta*cont)
@@ -5258,7 +5254,6 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 	set_params(x, st->cal_set);
 
 	int param_offset = st->cal_set == 1 || st->cal_set == 0 ? ((st->sim)->data_moments)->size2 : 0;
-
 
 	status 	= sol_ss(ss,NULL,xss,sol);
 	if(printlev>=0 && status>=1) printf("Steady state not solved \n");
