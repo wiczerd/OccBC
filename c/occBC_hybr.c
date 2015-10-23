@@ -95,8 +95,8 @@ double 	beta	= 0.9967;	// monthly discount
 double	nu 		= 0.0; 		// switching cost --- I don't need this!
 double 	fm_shr	= 0.67;	// firm's surplus share
 double 	kappa	= 0.27;//.1306; corresponds to HM number
-double *	b; // unemployment benefit
-double 	brt		= 0.42;
+double *b; // unemployment benefit
+double 	brt	= 0.42;
 double 	bdur	= 6.0;
 double 	privn	= 0.18;
 double 	sbar	= 0.02;	// will endogenize this a la Cheremukhin (2011)
@@ -2391,6 +2391,11 @@ int ss_moments(struct aux_coef * ssdat, gsl_vector * ss, gsl_matrix * xss){
 }
 
 int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
+	// this function simulates a series and then computes productivity histories on it
+	// from these productivity histories, it estimates parameters of the process and then updates the decision rules
+	// this iteratively is estimating the productivity proccess, because each time it's called it updates the sequence slightly
+
+	
 	//run through a few draws without setting anything
 	struct sys_sol * sol = st->sol;
 	struct sys_coef * sys = st->sys;
@@ -2426,7 +2431,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 		mats1.var_eta = var_eta;
 	}
 	mats1.Lambda	= gsl_matrix_alloc(Noccs,Nfac+1);
-	gsl_matrix * mats0Lambda = gsl_matrix_calloc(Noccs,Nfac+1);
+
 	mats1.var_zeta	= gsl_matrix_alloc(Noccs,Noccs);
 
 	int printlev_old 	= printlev;
@@ -2474,8 +2479,10 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 			status += gpol(sol->gld, ss, sys, sol, Zz);
 			status += spol(sol->sld, ss, sys, sol, Zz);
 			status += xprime(xp,ss,sys,sol,x,Zz);
-
+			// advance x on period, put xp into x
 			gsl_matrix_memcpy(x,xp);
+
+			// compute z from this, which will be used to estimate the proccess
 			double avg_scale = 0.0;
 			for(d=0;d<Noccs;d++){
 				double zd = 0.0,xd=0.0;;
@@ -2492,7 +2499,8 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 			gsl_vector_scale(&zhist_di.vector,(double)Noccs /avg_scale);
 		}// end di = 1:simT
 
-		// now have to estimate the process given zhist
+		// now have to estimate the process given zhist (idiosync prod) and Zhist (ag prod)
+		// Estimate on new data and update!!
 		status += est_fac_pro(zhist,Zhist,&mats1);
 		// don't let rhozz get closer to 1
 		double rhozz_old = rhozz;
@@ -2500,6 +2508,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 		gsl_matrix_scale(mats1.var_zeta,scale_var_zeta);
 
 		// resolve decision rules around the process
+		// essentially this is updating the matrices
 		status += sys_ex_set(sys->N,sys->S,&mats1);
 		status += sol_dyn(ss,sol, sys,1);
 
@@ -2523,6 +2532,8 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 			if(estiter==0) printf("stoch proc, iter: ");
 			else printf(".");
 		}
+
+		// converged on the right z process
 		if(zdist_i<1e-4)
 			break;
 		gsl_matrix_memcpy(zhist0,zhist);
@@ -2558,7 +2569,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 		gsl_matrix_free(mats1.var_eta);
 	}
 
-	gsl_matrix_free(mats1.Lambda);gsl_matrix_free(mats0Lambda);
+	gsl_matrix_free(mats1.Lambda);
 	gsl_matrix_free(mats1.var_zeta);
 	return status;
 }
@@ -3914,7 +3925,7 @@ int theta(gsl_matrix * tld, const gsl_vector * ss, const struct sys_coef * sys, 
 	status += Es_cal(Es, &ss_W.vector, sol->PP, Zz);
 
 	for(l=0;l<Noccs+1;l++){
-		double bl = l>0 ? b[1]:b[0];
+		double bl = l>0 ? b[1]:b[0];		
 		for(ll=0;ll<2;ll++){
 			double tld_s = 0.0;
 			for(d=0;d<Noccs;d++){
@@ -3923,7 +3934,7 @@ int theta(gsl_matrix * tld, const gsl_vector * ss, const struct sys_coef * sys, 
 				double cont	= (Es->data[Wld_i+l*Noccs+d] -
 						(1.0-1.0/bdur)*Es->data[Wl0_i+l + ll*(Noccs+1)] - 1.0/bdur*Es->data[Wl0_i+l + Noccs+1] );
 				//cont = ss->data[ss_Wld_i+l*Noccs+d] -ss->data[ss_Wl0_i+l];
-				double surp =chi[l][d]*(1.0+zd) - bl - nud + beta*cont;
+				double surp =chi[l][d]*(1.0+zd) - bl*(1.-(double)ll)-(double)ll*privn - nud + beta*cont;
 
 				double qhere = kappa/(fm_shr*surp);
 				double tld_i = invq(qhere);
@@ -4154,57 +4165,7 @@ int interp_shock_seq(const gsl_matrix * obs_prod, gsl_matrix * mon_prod){
 	return status;
 }
 
-/*
-int sol_shock_pro(const gsl_matrix * obs_prod, gsl_matrix * x_hist, struct shock_mats * mats){
-	int status = 0,T, t,i, c,l;
-	gsl_matrix * mon_prod,*occ_prod;
-	T = x_hist->size1;
-	mon_prod = gsl_matrix_alloc((double) obs_prod->size2*12.0,obs_prod->size1);
-	status += interp_shock_seq(obs_prod,mon_prod);
-	gsl_matrix_const_view obsz_prod  = gsl_matrix_const_submatrix(obs_prod,0,1,obs_prod->size1,obs_prod->size2);
-	gsl_vector_view mon_Z = gsl_matrix_column(mon_prod,0);
-	if(T%mon_prod->size2!=0)
-		printf("x_hist is not the correct length for a monthly simulation");
-	occ_prod = gsl_matrix_alloc(T,Noccs);
 
-	// for each industry, create the transition matrix
-	gsl_matrix * Pindocc	 = gsl_matrix_calloc(Nind,Noccs);
-	gsl_matrix * ind_density = gsl_matrix_alloc(Nind,Noccs);
-	for(i=0;i<Nind;i++){
-		double sumind = 0.0;
-		for(c=0;c<Noccs;c++)
-			sumind += pdf_occind->data[c*pdf_occind->tda + i];
-		for(c=0;c<Noccs;c++)
-			ind_density->data[i*ind_density->tda+c] =
-					pdf_occind->data[c*pdf_occind->tda + i]/sumind;
-	}
-	for(t=0;t<T-1;t++){
-		for(c=0;c<Noccs;c++){
-			double Eprod = 0.0;
-			double xtot = 0.0;
-			for(l=0;l<Noccs+1;l++){
-				Eprod += chi[l][c]*x_hist->data[(t+1)*x_hist->tda + l*Noccs+c];
-				xtot += x_hist->data[(t+1)*x_hist->tda + l*Noccs+c];
-			}
-			Eprod /= xtot;
-			for(i=0;i<Nind;i++)
-				Pindocc->data[i*Noccs + c] = Eprod*ind_density->data[i*Noccs+c];
-
-		}
-		gsl_vector_view zct = gsl_matrix_row(occ_prod,t);
-		gsl_vector_const_view zit = gsl_matrix_const_row(&obsz_prod.matrix,t);
-		status += pinv_sol(&zct.vector,Pindocc,&zit.vector);
-	}
-	// now estimate the factor process
-	status += est_fac_pro(occ_prod,&mon_Z.vector,mats);
-
-
-	gsl_matrix_free(Pindocc);
-	gsl_matrix_free(mon_prod);
-	gsl_matrix_free(occ_prod);
-	return status;
-}
-*/
 
 int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats){
 
@@ -5208,7 +5169,7 @@ int set_params(const double * x, int cal_set){
 	// recompute b[0]
 	//b[1]=0.71;
 	b[1] = brt;
-	b[0]=0.0;
+	b[0] = 0.0;
 	for(d=0;d<Noccs;d++){
 		for(l=0;l<Noccs+1;l++)
 			b[0] += chi[l][d];
