@@ -222,6 +222,8 @@ int ss_moments(struct aux_coef * ssdat, gsl_vector * ss, gsl_matrix * xss);
 int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss);
 int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_matrix * pld_hist, const gsl_matrix * x_u_hist);
 
+int fd_dat_sim(gsl_matrix * fd_hist_dat, struct shock_mats * fd_mats);
+
 int TGR(//gsl_vector* u_dur_dist, gsl_vector* opt_dur_dist, gsl_vector * fnd_dist, gsl_vector * opt_fnd_dist,
 		//double *urt, double *opt_urt,
 		struct st_wr * st);
@@ -333,7 +335,7 @@ int main(int argc,char *argv[]){
 	gsl_matrix_view LC = gsl_matrix_submatrix(LamRead,0,0,Noccs,Nfac*(Nllag+1));
 	gsl_matrix_memcpy(LambdaCoef,&LC.matrix);
 	LC = gsl_matrix_submatrix(LamRead,0,Nfac*(Nllag+1),Noccs,1);
-	gsl_matrix_memcpy(LambdaZCoef,&LC.matrix);
+	gsl_matrix_memcpy(LambdaZCoef,&(LC.matrix));
 	readmat("var_eta.csv",var_eta);
 	if(homosk_zeta==1){
 		// zeta covariance matrix is diagonal and maybe homoskedastic
@@ -1729,111 +1731,111 @@ int sys_st_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix*
 
 
 	for(l=0;l<Noccs+1;l++){
-			double bl = l>0 ? b[1]:b[0];
-			double findrtl = 0.0;
-			for(d=0;d<Noccs;d++)	findrtl += ss->data[ss_gld_i+l*Noccs+d]*pmatch(ss->data[ss_tld_i+l*Noccs+d]);
-			double findrtle	= 0.0;
-			for(d=0;d<Noccs;d++)	findrtle += ss->data[ss_gld_i+JJ1+l*Noccs+d]*pmatch(ss->data[ss_tld_i+JJ1+l*Noccs+d]);
-			/*double gdenom = 0.0;
-			for(d=0;d<Noccs;d++){
-				double nud = l ==d+1? 0.0 : nu;
-				double contval = (ss->data[ss_Wld_i+l*Noccs+d]-ss->data[ss_Wl0_i+l]);
-				double pld 	= pmatch(ss->data[ss_tld_i+l*Noccs+d]);
-				double post = pld > 0.0? -kappa*ss->data[ss_tld_i+l*Noccs+d]/pld: 0.0;
-				gdenom +=exp(sig_psi*pld*
-						(chi[l][d]-bl+nud+ post + beta*contval));
-			}*/
-			// Wl0
-			double Wl0_ss 	= ss->data[ss_Wl0_i + l];
-			double Wl0e_ss 	= ss->data[ss_Wl0_i + l+Noccs+1];
-			gsl_matrix_set(Dst_tp1,Wl0_i+l,Wl0_i+l, beta*(1.0-findrtl)*(1.0-1.0/bdur) );
-			double dWl0dWl0e = beta*(1.0-findrtl)*1.0/bdur;
-			gsl_matrix_set(Dst_tp1,Wl0_i+l,Wl0_i+l +Noccs+1, dWl0dWl0e*Wl0e_ss/Wl0_ss );
-			gsl_matrix_set(Dst_tp1,Wl0_i+l +Noccs+1,Wl0_i+l +Noccs+1, beta*(1.0-findrtle) );
+		double bl = l>0 ? b[1]:b[0];
+		double findrtl = 0.0;
+		for(d=0;d<Noccs;d++)	findrtl += ss->data[ss_gld_i+l*Noccs+d]*pmatch(ss->data[ss_tld_i+l*Noccs+d]);
+		double findrtle	= 0.0;
+		for(d=0;d<Noccs;d++)	findrtle += ss->data[ss_gld_i+JJ1+l*Noccs+d]*pmatch(ss->data[ss_tld_i+JJ1+l*Noccs+d]);
+		/*double gdenom = 0.0;
+		for(d=0;d<Noccs;d++){
+			double nud = l ==d+1? 0.0 : nu;
+			double contval = (ss->data[ss_Wld_i+l*Noccs+d]-ss->data[ss_Wl0_i+l]);
+			double pld 	= pmatch(ss->data[ss_tld_i+l*Noccs+d]);
+			double post = pld > 0.0? -kappa*ss->data[ss_tld_i+l*Noccs+d]/pld: 0.0;
+			gdenom +=exp(sig_psi*pld*
+					(chi[l][d]-bl+nud+ post + beta*contval));
+		}*/
+		// Wl0
+		double Wl0_ss 	= ss->data[ss_Wl0_i + l];
+		double Wl0e_ss 	= ss->data[ss_Wl0_i + l+Noccs+1];
+		gsl_matrix_set(Dst_tp1,Wl0_i+l,Wl0_i+l, beta*(1.0-findrtl)*(1.0-1.0/bdur) );
+		double dWl0dWl0e = beta*(1.0-findrtl)*1.0/bdur;
+		gsl_matrix_set(Dst_tp1,Wl0_i+l,Wl0_i+l +Noccs+1, dWl0dWl0e*Wl0e_ss/Wl0_ss );
+		gsl_matrix_set(Dst_tp1,Wl0_i+l +Noccs+1,Wl0_i+l +Noccs+1, beta*(1.0-findrtle) );
 
-			gsl_matrix_set(Dst,Wl0_i+l,Wl0_i+l,1.0);
-			gsl_matrix_set(Dst,Wl0_i+l+Noccs+1,Wl0_i+l+Noccs+1,1.0);
-			for(d=0;d<Noccs;d++){
-				double Wld_ss = ss->data[ss_Wld_i + l*Noccs+d];
-				double zd = xx->data[d+Notz];
-				// Wld
-				gsl_matrix_set(Dst,Wld_i + l*Noccs+d,Wld_i+l*Noccs+d,1.0);
-				if(ss->data[ss_tld_i + l*Noccs+d]>0.0 || ss->data[ss_tld_i + l*Noccs+d+JJ1]>0.0){
-					if(d+1 ==l){
-						gsl_matrix_set(Dst_tp1,Wld_i + l*Noccs+d, Wld_i+l*Noccs+d, (1.0-ss->data[ss_sld_i + l*Noccs+d])*beta);
-						gsl_matrix_set(Dst,Wld_i + l*Noccs+d, Wl0_i+l, - (ss->data[ss_sld_i + l*Noccs+d])
+		gsl_matrix_set(Dst,Wl0_i+l,Wl0_i+l,1.0);
+		gsl_matrix_set(Dst,Wl0_i+l+Noccs+1,Wl0_i+l+Noccs+1,1.0);
+		for(d=0;d<Noccs;d++){
+			double Wld_ss = ss->data[ss_Wld_i + l*Noccs+d];
+			double zd = xx->data[d+Notz];
+			// Wld
+			gsl_matrix_set(Dst,Wld_i + l*Noccs+d,Wld_i+l*Noccs+d,1.0);
+			if(ss->data[ss_tld_i + l*Noccs+d]>0.0 || ss->data[ss_tld_i + l*Noccs+d+JJ1]>0.0){
+				if(d+1 ==l){
+					gsl_matrix_set(Dst_tp1,Wld_i + l*Noccs+d, Wld_i+l*Noccs+d, (1.0-ss->data[ss_sld_i + l*Noccs+d])*beta);
+					gsl_matrix_set(Dst,Wld_i + l*Noccs+d, Wl0_i+l, - (ss->data[ss_sld_i + l*Noccs+d])
+						*ss->data[ss_Wl0_i+l]/Wld_ss
+						);
+					double cont_dd =chi[l][d]*(1.0+zd) -bl + beta*ss->data[ss_Wld_i+l*Noccs+d];
+					double dWds = -cont_dd + ss->data[ss_Wl0_i+l];
+					gsl_matrix_set(Dco,Wld_i + l*Noccs+d, sld_i+l*Noccs+d,dWds
+						/Wld_ss*ss->data[ss_sld_i+l*Noccs+d]
+						);
+				}
+				else{
+					gsl_matrix_set(Dst_tp1,Wld_i + l*Noccs+d,Wld_i+l*Noccs+d,
+							beta*(1.0-tau)*(1.0-ss->data[ss_sld_i + l*Noccs+d]) );
+
+					gsl_matrix_set(Dst,Wld_i + l*Noccs+d,Wld_i+(d+1)*Noccs+d,-tau
+							*ss->data[ss_Wld_i+(d+1)*Noccs+d]/Wld_ss
+							);
+					gsl_matrix_set(Dst,Wld_i + l*Noccs+d, Wl0_i+0,-(1.0-tau)*ss->data[ss_sld_i + l*Noccs+d]
 							*ss->data[ss_Wl0_i+l]/Wld_ss
 							);
-						double cont_dd =chi[l][d]*(1.0+zd) -bl + beta*ss->data[ss_Wld_i+l*Noccs+d];
-						double dWds = -cont_dd + ss->data[ss_Wl0_i+l];
-						gsl_matrix_set(Dco,Wld_i + l*Noccs+d, sld_i+l*Noccs+d,dWds
+					double cont_ld =chi[l][d]*(1.0+zd) - bl + beta*ss->data[ss_Wld_i+l*Noccs+d];
+					double dWds =-(1.0-tau)*(cont_ld - ss->data[ss_Wl0_i+0]);
+					gsl_matrix_set(Dco,Wld_i + l*Noccs+d, sld_i+l*Noccs+d,dWds
 							/Wld_ss*ss->data[ss_sld_i+l*Noccs+d]
 							);
-					}
-					else{
-						gsl_matrix_set(Dst_tp1,Wld_i + l*Noccs+d,Wld_i+l*Noccs+d,
-								beta*(1.0-tau)*(1.0-ss->data[ss_sld_i + l*Noccs+d]) );
-
-						gsl_matrix_set(Dst,Wld_i + l*Noccs+d,Wld_i+(d+1)*Noccs+d,-tau
-								*ss->data[ss_Wld_i+(d+1)*Noccs+d]/Wld_ss
-								);
-						gsl_matrix_set(Dst,Wld_i + l*Noccs+d, Wl0_i+0,-(1.0-tau)*ss->data[ss_sld_i + l*Noccs+d]
-								*ss->data[ss_Wl0_i+l]/Wld_ss
-								);
-						double cont_ld =chi[l][d]*(1.0+zd) - bl + beta*ss->data[ss_Wld_i+l*Noccs+d];
-						double dWds =-(1.0-tau)*(cont_ld - ss->data[ss_Wl0_i+0]);
-						gsl_matrix_set(Dco,Wld_i + l*Noccs+d, sld_i+l*Noccs+d,dWds
-								/Wld_ss*ss->data[ss_sld_i+l*Noccs+d]
-								);
-					}
-				}// tss>0 market is open
-
-
-				// Wl0
-				for(ll=0;ll<2;ll++){
-					// ss_ret = -nu - kappa/theta^ld/p^ld + mu^ld - mu^l0
-					double Wl0_ss	= ss->data[ss_Wl0_i+l + ll*(Noccs+1)];
-					double pld		= pmatch(ss->data[ss_tld_i+l*Noccs+d + JJ1*ll]);
-					double post 	=  - kappa*ss->data[ss_tld_i+l*Noccs+d]/pld;
-					double ss_ret 	= d+1==l ? 0.0 : -nu;
-					ss_ret += chi[l][d]*(1.0+zd) - bl*(1.0-(double)ll) - privn*((double)ll);
-					double contval = beta*(ss->data[ss_Wld_i+l*Noccs+d] -(1.0-1.0/bdur)*ss->data[ss_Wl0_i+l + ll*(Noccs+1)] -
-							1.0/bdur*ss->data[ss_Wl0_i+l + Noccs+1]);
-					ss_ret += contval;
-					ss_ret *= (1.0-fm_shr);
-					ss_ret += bl*(1.0-(double)ll) + privn*((double)ll) + beta*(1.0-1.0/bdur)*ss->data[ss_Wl0_i+l + ll*(Noccs+1)] +
-							beta*1.0/bdur*ss->data[ss_Wl0_i+l + Noccs+1];
-					double u_ret = bl*(1.0-(double)ll) + privn*((double)ll) + beta*(1.0-1.0/bdur)*ss->data[ss_Wl0_i+l + ll*(Noccs+1)]+
-							beta*1.0/bdur*ss->data[ss_Wl0_i+l + Noccs+1];
-
-					double dtld = ss->data[ss_gld_i+l*Noccs+d+ll*JJ1]*dpmatch(ss->data[ss_tld_i+l*Noccs+d+ll*JJ1])*(
-									ss_ret
-									//- kappa*pow(ss->data[ss_tld_i+l*Noccs+d],phi)/(1.0+pow(ss->data[ss_tld_i+l*Noccs+d],phi))
-									- u_ret);
-
-					if(gsl_finite(dtld) && pld>0.0)
-						gsl_matrix_set(Dco,Wl0_i+l+ll*(Noccs+1),tld_i+l*Noccs+d+ll*JJ1,dtld
-								*ss->data[ss_tld_i+l*Noccs+d+ll*JJ1]/Wl0_ss
-								);
-					else
-						gsl_matrix_set(Dco,Wl0_i+l+ll*(Noccs+1),tld_i+l*Noccs+d+ll*JJ1,0.0);
-
-					if(pld>0.0 && gsl_finite(pld*ss_ret))
-						gsl_matrix_set(Dco,Wl0_i+l+ll*(Noccs+1),gld_i+l*Noccs+d+ll*JJ1,pld*(ss_ret - u_ret)
-							*ss->data[ss_gld_i+l*Noccs+d+ll*JJ1]/Wl0_ss
-						);
-					else
-						gsl_matrix_set(Dco,Wl0_i+l+ll*(Noccs+1),gld_i+l*Noccs+d+ll*JJ1,0.0);
-
-					double disc_cont = (1.0-fm_shr)*beta*pld*ss->data[ss_gld_i+l*Noccs+d + JJ1*ll];
-					if(pld>0.0 && gsl_finite(disc_cont))
-						gsl_matrix_set(Dst_tp1,Wl0_i+l+ll*(Noccs+1),Wld_i+l*Noccs+d,disc_cont
-								/Wl0_ss*Wld_ss
-							);
-					else
-						gsl_matrix_set(Dst_tp1,Wl0_i+l+ll*(Noccs+1),Wld_i+l*Noccs+d,0.0);
 				}
+			}// tss>0 market is open
+
+
+			// Wl0
+			for(ll=0;ll<2;ll++){
+				// ss_ret = -nu - kappa/theta^ld/p^ld + mu^ld - mu^l0
+				double Wl0_ss	= ss->data[ss_Wl0_i+l + ll*(Noccs+1)];
+				double pld		= pmatch(ss->data[ss_tld_i+l*Noccs+d + JJ1*ll]);
+				double post 	=  - kappa*ss->data[ss_tld_i+l*Noccs+d]/pld;
+				double ss_ret 	= d+1==l ? 0.0 : -nu;
+				ss_ret += chi[l][d]*(1.0+zd) - bl*(1.0-(double)ll) - privn*((double)ll);
+				double contval = beta*(ss->data[ss_Wld_i+l*Noccs+d] -(1.0-1.0/bdur)*ss->data[ss_Wl0_i+l + ll*(Noccs+1)] -
+						1.0/bdur*ss->data[ss_Wl0_i+l + Noccs+1]);
+				ss_ret += contval;
+				ss_ret *= (1.0-fm_shr);
+				ss_ret += bl*(1.0-(double)ll) + privn*((double)ll) + beta*(1.0-1.0/bdur)*ss->data[ss_Wl0_i+l + ll*(Noccs+1)] +
+						beta*1.0/bdur*ss->data[ss_Wl0_i+l + Noccs+1];
+				double u_ret = bl*(1.0-(double)ll) + privn*((double)ll) + beta*(1.0-1.0/bdur)*ss->data[ss_Wl0_i+l + ll*(Noccs+1)]+
+						beta*1.0/bdur*ss->data[ss_Wl0_i+l + Noccs+1];
+
+				double dtld = ss->data[ss_gld_i+l*Noccs+d+ll*JJ1]*dpmatch(ss->data[ss_tld_i+l*Noccs+d+ll*JJ1])*(
+								ss_ret
+								//- kappa*pow(ss->data[ss_tld_i+l*Noccs+d],phi)/(1.0+pow(ss->data[ss_tld_i+l*Noccs+d],phi))
+								- u_ret);
+
+				if(gsl_finite(dtld) && pld>0.0)
+					gsl_matrix_set(Dco,Wl0_i+l+ll*(Noccs+1),tld_i+l*Noccs+d+ll*JJ1,dtld
+							*ss->data[ss_tld_i+l*Noccs+d+ll*JJ1]/Wl0_ss
+							);
+				else
+					gsl_matrix_set(Dco,Wl0_i+l+ll*(Noccs+1),tld_i+l*Noccs+d+ll*JJ1,0.0);
+
+				if(pld>0.0 && gsl_finite(pld*ss_ret))
+					gsl_matrix_set(Dco,Wl0_i+l+ll*(Noccs+1),gld_i+l*Noccs+d+ll*JJ1,pld*(ss_ret - u_ret)
+						*ss->data[ss_gld_i+l*Noccs+d+ll*JJ1]/Wl0_ss
+					);
+				else
+					gsl_matrix_set(Dco,Wl0_i+l+ll*(Noccs+1),gld_i+l*Noccs+d+ll*JJ1,0.0);
+
+				double disc_cont = (1.0-fm_shr)*beta*pld*ss->data[ss_gld_i+l*Noccs+d + JJ1*ll];
+				if(pld>0.0 && gsl_finite(disc_cont))
+					gsl_matrix_set(Dst_tp1,Wl0_i+l+ll*(Noccs+1),Wld_i+l*Noccs+d,disc_cont
+							/Wl0_ss*Wld_ss
+						);
+				else
+					gsl_matrix_set(Dst_tp1,Wl0_i+l+ll*(Noccs+1),Wld_i+l*Noccs+d,0.0);
 			}
+		}
 	}
 	return status;
 }
@@ -3706,7 +3708,83 @@ int TGR(struct st_wr * st){
 	return status;
 }
 
-int fd_dat_sim(gsl_matrix * fd_hist_dat)
+int fd_dat_sim(gsl_matrix * fd_hist_dat, struct shock_mats * fd_mats){
+	int status,simT, t,d,dd,fi;
+	status =0;
+	gsl_matrix *zeta_draw, *eta_draw,*Zf_hist,*Zfd_hist;
+	gsl_matrix *chol_varzeta,*chol_vareta;
+	gsl_matrix *fd_fac;
+	gsl_vector *fd_ag, *epsilon_draw,fd_fac_tm1;
+	simT = fd_hist_dat->size1;
+
+	zeta_draw = gsl_matrix_calloc(simT,Noccs);
+	epsilon_draw = gsl_vector_calloc(simT);
+	eta_draw = gsl_matrix_calloc(simT,Nfac);
+	fd_ag = gsl_vector_calloc(simT);
+	fd_fac = gsl_matrix_calloc(simT,Nfac);
+	fd_fac_tm1 = gsl_vector_calloc(Nfac);
+	randn(zeta_draw,9041987);
+	gsl_matrix_view epsilon_draw_mat = gsl_matrix_view_vector(epsilon_draw,1,simT);
+	randn( &(epsilon_draw_mat.matrix),12281951);
+	randn(eta_draw, 9241951);
+
+	double rhoZ = fd_mats->rhoZ;
+	double rhozz = fd_mats->rhozz;
+	double sig_eps = pow(fd_mats->sig_eps2,0.5);
+
+	if(diag_zeta ==1 || homosk_zeta ==1){
+		for(d=0;d<Noccs;d++){
+			gsl_matrix_set(chol_varzeta,d,d,gsl_matrix_get(fd_mats->var_zeta,d,d) );
+		}
+	}else{
+		gsl_matrix_memcpy(chol_varzeta,fd_mats->var_zeta);
+		status+= gsl_linalg_cholesky_decomp (chol_varzeta);
+		for(d=0;d<Noccs;d++){//set the upper triangle to 0.
+			for(dd=d+1;dd<Noccs;dd++)
+				gsl_matrix_set(chol_varzeta,d,dd,0.);
+		}
+	}
+	gsl_matrix_memcpy(chol_vareta,fd_mats->var_eta);
+	status += gsl_linalg_cholesky_decomp(chol_vareta);
+	for(d=0;d<Nfac;d++){
+		if(Nfac>1){
+			for(dd=d+1;dd<Nfac;dd++)
+				gsl_matrix_set(chol_vareta,d,dd,0.);
+		}
+	}
+	gsl_vector_set(fd_ag,0,sig_eps*gsl_vector_get(epsilon_draw,0));
+	status += gsl_blas_dgemv(CblasNoTrans, 1., chol_vareta, &(gsl_matrix_row(eta_draw,0).vector), 0., &(gsl_matrix_row(fd_fac,0).vector));
+	status += gsl_blas_dgemv(CblasNoTrans, 1., chol_varzeta, &(gsl_matrix_row(zeta_draw,0).vector), 0., &(gsl_matrix_row(fd_hist_dat,0).vector));
+	for(t=1;t<simT;t++){
+		gsl_vector_set(fd_ag,t,
+					   rhoZ* gsl_vector_get(fd_ag,t-1)  +sig_eps*gsl_vector_get(epsilon_draw,t));
+		//advance facs
+		status += gsl_blas_dgemv(CblasNoTrans, 1., chol_vareta, &(gsl_matrix_row(eta_draw,t).vector), 0., &(gsl_matrix_row(fd_fac,t).vector));
+		status += gsl_blas_dgemv(CblasNoTrans, 1., fd_mats->Gamma, &(gsl_matrix_row(fd_fac,t-1).vector), 0., fd_fac_tm1 );
+		status += gsl_vector_add( &(gsl_matrix_row(fd_fac,t).vector) , fd_fac_tm1);
+		//advance fd_hist
+		status += gsl_blas_dgemv(CblasNoTrans, 1., chol_varzeta, &(gsl_matrix_row(zeta_draw,t).vector), 0., &(gsl_matrix_row(fd_hist_dat,t).vector));
+		for(d=0;d<Noccs;d++){
+			double fd_here = gsl_matrix_get(fd_hist_dat, t,d);
+			fd_here += gsl_matrix_get(fd_mats->Lambda,d,Nfac)*gsl_vector_get(fd_ag,t)
+					   + rhozz * gsl_matrix_get(fd_hist_dat,t-1,d);
+			for(fi=0;fi<Nfac;fi++)
+				fd_here += gsl_matrix_get(fd_mats->Lambda,d,fi)*gsl_matrix_get(fd_fac,t,fi);
+			gsl_matrix_set(fd_hist_dat,t,d,fd_here);
+		}
+	}
+
+
+	gsl_matrix_free(zeta_draw);
+	gsl_matrix_free(eta_draw);
+	gsl_vector_free(epsilon_draw);
+	gsl_matrix_free(fd_fac);
+	gsl_vector_free(fd_ag);
+	gsl_vector_free(fd_fac_tm1);
+	return status;
+}
+
+
 
 /*
  * Policy functions

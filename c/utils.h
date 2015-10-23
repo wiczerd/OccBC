@@ -411,12 +411,13 @@ int sol_AXM(gsl_matrix * A, gsl_matrix * M, gsl_matrix *X, void* tri_v){
 	return status;
 }
 
-int pca(gsl_matrix * data, const int dimensions_we_want, const int demean, gsl_matrix * pc_space, gsl_matrix * projected){
+int pca(const gsl_matrix * data, const int dimensions_we_want, const int demean, const int stdize,gsl_matrix * pc_space, gsl_matrix * projected){
 	int ds = data->size2;
 	int i,c,status=0;
 	gsl_matrix * x;
+	x = gsl_matrix_calloc(data->size1,data->size2);
+
 	if (demean>0){
-		x = gsl_matrix_calloc(data->size1,data->size2);
 		gsl_matrix_memcpy(x,data);
 		for(i=0;i<data->size1;i++){
 			double rmean = 0.0;
@@ -426,10 +427,24 @@ int pca(gsl_matrix * data, const int dimensions_we_want, const int demean, gsl_m
 			for (c=0;c<data->size2;c++)
 				x->data[i*data->tda + c] -= rmean;
 		}
-
 	}
 	else
-		x= data;
+		gsl_matrix_memcpy( x,data);
+	if(stdize >0){
+		for(i=0;i<data->size1;i++){
+			double rvar =  0.;
+			double rmean = 0.0;
+			for (c=0;c<data->size2;c++)
+				rmean += data->data[i*data->tda + c];
+			rmean /= (double)data->size2;
+			for (c=0;c<data->size2;c++)
+				rvar += pow(data->data[i*data->tda + c] -rmean ,2);
+			rvar /= (double)data->size2;
+			for (c=0;c<data->size2;c++)
+				x->data[i*data->tda + c] /= pow(rvar,0.5);
+		}
+	}
+
 	gsl_matrix *cov_matrix = gsl_matrix_calloc(ds, ds);
 	gsl_vector *eigenvals = gsl_vector_alloc(ds);
 	gsl_matrix *eigenvecs = gsl_matrix_alloc(ds, ds);
@@ -448,8 +463,7 @@ int pca(gsl_matrix * data, const int dimensions_we_want, const int demean, gsl_m
 	gsl_matrix_free(cov_matrix);
 	gsl_vector_free(eigenvals);
 	gsl_matrix_free(eigenvecs);
-	if(demean>0)
-		gsl_matrix_free(x);
+	gsl_matrix_free(x);
 	return status;
 }
 
