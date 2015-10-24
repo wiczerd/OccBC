@@ -181,6 +181,7 @@ struct st_wr{
 	struct sys_coef * sys;
 	struct sys_sol * sol;
 	struct aux_coef * sim;
+	struct shock_mats* mats;
 	int cal_set,d;
 	unsigned n;
 	double cal_worst,cal_best;
@@ -197,18 +198,19 @@ struct shock_mats{
 
 
 struct st_wr * g_st;
+struct shock_mats * fd_mats;
 
 // Solve the steady state
 int sol_ss(gsl_vector * ss, gsl_vector * Zz,gsl_matrix * xss, struct sys_sol *sol);
 
 // Solving the dynamic model
 int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef * sys, int sol_shocks);
-int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss);
+int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_mats * mats0);
 int sys_ex_set(gsl_matrix * N, gsl_matrix * S,struct shock_mats * mats);
 int sys_st_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix* Dst_tp1, gsl_vector * xx);
 int sys_co_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix* Dst_tp1, gsl_vector * xx);
 int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco);
-int sys_def(gsl_vector * ss, struct sys_coef *sys);
+int sys_def(gsl_vector * ss, struct sys_coef *sys, struct shock_mats * mat0);
 
 // Policies
 int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, const struct sys_sol * sol, const gsl_vector * Zz);
@@ -261,15 +263,7 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params);
 int cal_dist_wrap(const gsl_vector * x, void* params, gsl_vector * f);
 void dfovec_iface_(double * f, double * x, int * n);
 
-/*
-double quad_solve(unsigned n, const double *x, double *grad, void*params){
-	// to test the multi-start
-	int i;
-	double obj=0.0;
-	for(i=0;i<n;i++)
-		obj+= (double)(i+1) * pow(x[i],2);
-	return obj;
-}*/
+
 
 int main(int argc,char *argv[]){
 	// pass 0 to calibrate the whole thing, 1 for just calibration, 2 for wage parameters and 3+ for whole thing.
@@ -320,8 +314,20 @@ int main(int argc,char *argv[]){
 		double x3[] = {phi,scale_s,shape_s,effic};
 		set_params(x3,3);
 	}
-	// read in the matrices that are from finding rates in the data
 
+	// read in the matrices that are from finding rates in the data
+	fd_mats = malloc(sizeof(struct shock_mats));
+	fd_mats->Gamma = gsl_matrix_calloc(Nfac,Nfac);
+	fd_mats->Lambda = gsl_matrix_calloc(Noccs,Nfac+1);
+	fd_mats->var_eta = gsl_matrix_calloc(Nfac,Nfac);
+	fd_mats->var_zeta= gsl_matrix_calloc(Noccs,Noccs);
+	readmat("Gamma_fd.csv",fd_mats->Gamma);
+	readmat("Lambda_fd.csv",fd_mats->Lambda);
+	readmat("var_eta_fd.csv",fd_mats->var_eta);
+	readmat("var_zeta_fd.csv",fd_mats->var_zeta);
+	FILE * readfdparams = fopen("params_in_fd.csv","r+");
+	fscanf(readfdparams, "%lf,%lf,%lf",fd_mats->rhoZ,fd_mats->rhozz,fd_mats->sig_eps2);
+	fclose(readfdparams);
 
 
 
@@ -373,6 +379,7 @@ int main(int argc,char *argv[]){
 	}
 
 	struct st_wr * st = malloc( sizeof(struct st_wr) );
+
 	st->cal_set = calflag;
 	st->cal_best= 10.0;
 	st->cal_worst= 0.0;
@@ -548,7 +555,7 @@ int main(int argc,char *argv[]){
 	status += sol_ss(st->ss,NULL,st->xss,st->sol);
 	if(verbose>=1 && status ==0) printf("Successfully computed the steady state\n");
 	if(verbose>=0 && status ==1) printf("Broke while computing steady state\n");
-	status += sys_def(st->ss,st->sys);
+	status += sys_def(st->ss,st->sys,st->mats);
 	if(verbose>=1 && status >=1) printf("System not defined\n");
 	if(verbose>=0 && status ==0) printf("System successfully defined\n");
 
@@ -587,6 +594,11 @@ int main(int argc,char *argv[]){
 		free(chi[l]);
 	free(chi);
 	free(st);
+	gsl_matrix_free(fd_mats->Gamma);
+	gsl_matrix_free(fd_mats->Lambda);
+	gsl_matrix_free(fd_mats->var_eta);
+	gsl_matrix_free(fd_mats->var_zeta);
+	free(fd_mats);
 
 	return status;
 }
@@ -1501,7 +1513,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
  * The nonlinear system that will be solved
  */
 
-int sys_def(gsl_vector * ss, struct sys_coef * sys){
+int sys_def(gsl_vector * ss, struct sys_coef * sys, struct shock_mats *mat0){
 	int l,d,status=0,f;
 //	int wld_i, tld_i, x_i,gld_i;
 	int Nvarex 	= (sys->A3)->size2;
@@ -1522,8 +1534,9 @@ int sys_def(gsl_vector * ss, struct sys_coef * sys){
 	 *
 	 */
 
-	struct shock_mats mat0;
 
+	/* used to read these globals around which to solve things
+	 * struct shock_mats mat0;
 	mat0.Gamma = GammaCoef;
 	mat0.rhoZ	= rhoZ;
 	mat0.rhozz	= rhozz;
@@ -1535,10 +1548,11 @@ int sys_def(gsl_vector * ss, struct sys_coef * sys){
 	gsl_matrix_memcpy(&LC.matrix,LambdaCoef);
 	LC = gsl_matrix_submatrix(mat0.Lambda,0,Nfac*(Nllag+1),Noccs,1);
 	gsl_matrix_memcpy(&LC.matrix,LambdaZCoef);
+	*/
 
-	status += sys_ex_set(sys->N,sys->S,&mat0);
+	status += sys_ex_set(sys->N,sys->S,mat0);
 
-	gsl_matrix_free(mat0.Lambda);
+
 	gsl_vector * Zz = gsl_vector_calloc(Nvarex);
 	status += sys_st_diff(ss,sys->A0,sys->A2,sys->A1,Zz);
 	status += sys_co_diff(ss,sys->F2,sys->F0,sys->F1,Zz);
@@ -2385,10 +2399,12 @@ int ss_moments(struct aux_coef * ssdat, gsl_vector * ss, gsl_matrix * xss){
 	return status;
 }
 
-int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
+int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_mats * mats0){
 	// this function simulates a series and then computes productivity histories on it
 	// from these productivity histories, it estimates parameters of the process and then updates the decision rules
 	// this iteratively is estimating the productivity proccess, because each time it's called it updates the sequence slightly
+	// it will over-write mats0 with the current best estimate for the process coefficients
+
 
 	//run through a few draws without setting anything
 	struct sys_sol * sol = st->sol;
@@ -2427,7 +2443,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 	sol->sld = gsl_matrix_calloc(Noccs+1,Noccs);
 
 	struct shock_mats mats1;
-	struct shock_mats mats0;
+
 	if(fix_fac!=1){
 		mats1.Gamma	= gsl_matrix_alloc(Nfac,Nfac*Nglag);
 		mats1.var_eta	= gsl_matrix_alloc(Nfac,Nfac);
@@ -2439,17 +2455,6 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 	}
 	mats1.Lambda	= gsl_matrix_alloc(Noccs,Nfac+1);
 	mats1.var_zeta	= gsl_matrix_alloc(Noccs,Noccs);
-	if(fix_fac !=1){
-		mats0.Gamma		= gsl_matrix_alloc(Nfac,Nfac*Nglag);
-		mats0.var_eta	= gsl_matrix_alloc(Nfac,Nfac);
-	}
-	else{
-		mats0.facs	= gsl_matrix_alloc(simT-1,Nfac)
-		mats0.Gamma = GammaCoef;
-		mats0.var_eta = var_eta;
-	}
-	mats0.Lambda	= gsl_matrix_alloc(Noccs,Nfac+1);
-	mats0.var_zeta	= gsl_matrix_alloc(Noccs,Noccs);
 
 
 	int printlev_old 	= printlev;
@@ -2493,7 +2498,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 				for(d=0;d<Nfac;d++)
 					gsl_matrix_set(mats1.facs,di,d,gsl_vector_get(Zz,Nagf+d));
 				for(d=0;d<Nfac;d++)
-					gsl_matrix_set(mats0.facs,di,d,gsl_vector_get(Zz,Nagf+d));
+					gsl_matrix_set(mats0->facs,di,d,gsl_vector_get(Zz,Nagf+d));
 			}
 			status += theta(sol->tld, ss, sys, sol, Zz);
 			status += gpol(sol->gld, ss, sys, sol, Zz);
@@ -2544,7 +2549,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 			double Z_fd = 0.;
 			for(d=0;d<Noccs;d++) Z_fd += gsl_vector_get(zz_invtheta,d)/(double)Noccs;
 			gsl_vector_add_constant(zz_invtheta,-Z_fd);
-			gsl_vector_set(Zhist,Z_fd);
+			gsl_vector_set(Zhist,di,Z_fd);
 
 				// store zz_invtheta
 			gsl_vector_view zhist_di = gsl_matrix_row(zhist,di);
@@ -2562,24 +2567,24 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 			gsl_matrix_scale(mats1.var_zeta,scale_var_zeta);
 		}
 		// update process matrices
-		mats0.rhozz	   = zmt_upd*mats1.rhozz    + (1.-zmt_upd)*mats0.rhozz;
-		mats0.rhoZ	   = zmt_upd*mats1.rhoZ     + (1.-zmt_upd)*mats0.rhoZ;
-		mats0.sig_eps2 = zmt_upd*mats1.sig_eps2 + (1.-zmt_upd)*mats0.sig_eps2;
+		mats0->rhozz	   = zmt_upd*mats1.rhozz    + (1.-zmt_upd)*mats0->rhozz;
+		mats0->rhoZ	   = zmt_upd*mats1.rhoZ     + (1.-zmt_upd)*mats0->rhoZ;
+		mats0->sig_eps2 = zmt_upd*mats1.sig_eps2 + (1.-zmt_upd)*mats0->sig_eps2;
 		for(d=0;d<Noccs;d++) {
 			for (l = 0; l < Nfac + 1; l++){
-				gsl_matrix_set(mats0.Lambda, d, l,
+				gsl_matrix_set(mats0->Lambda, d, l,
 							   zmt_upd * gsl_matrix_get(mats1.Lambda, d, l) +
-							   (1. - zmt_upd) * gsl_matrix_get(mats0.Lambda, d, l));
+							   (1. - zmt_upd) * gsl_matrix_get(mats0->Lambda, d, l));
 			}
 		}
 		for(d=0;d<Nfac;d++){
 			for(l=0;l<Nfac+1;l++) {
-				gsl_matrix_set(mats0.Gamma, d, l,
+				gsl_matrix_set(mats0->Gamma, d, l,
 							   zmt_upd * gsl_matrix_get(mats1.Gamma, d, l) +
-							   (1. - zmt_upd) * gsl_matrix_get(mats0.Gamma, d, l));
-				gsl_matrix_set(mats0.var_eta, d, l,
+							   (1. - zmt_upd) * gsl_matrix_get(mats0->Gamma, d, l));
+				gsl_matrix_set(mats0->var_eta, d, l,
 							   zmt_upd * gsl_matrix_get(mats1.var_eta, d, l) +
-							   (1. - zmt_upd) * gsl_matrix_get(mats0.var_eta, d, l));
+							   (1. - zmt_upd) * gsl_matrix_get(mats0->var_eta, d, l));
 
 			}
 		}
@@ -2587,7 +2592,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 
 		// resolve decision rules around the process
 		// essentially this is updating the matrices
-		status += sys_ex_set(sys->N,sys->S,&mats0);
+		status += sys_ex_set(sys->N,sys->S,mats0);
 		status += sol_dyn(ss,sol, sys,1);
 
 		double zdist_i = 0.0;
@@ -2635,7 +2640,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 	gsl_matrix_free(sol->tld);
 	gsl_matrix_free(xp);gsl_matrix_free(x);
 	gsl_vector_free(Zz);gsl_vector_free(Zzl);gsl_vector_free(shocks);
-	gsl_vector_free(Zz_invtheta);
+	gsl_vector_free(zz_invtheta);
 
 	gsl_matrix_free(zhist);gsl_matrix_free(zhist0);
 	gsl_vector_free(Zhist);
@@ -2657,10 +2662,6 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss){
 	gsl_matrix_free(mats1.Lambda);
 	gsl_matrix_free(mats1.var_zeta);
 
-	gsl_matrix_free(mats0.Lambda);
-	gsl_matrix_free(mats0.var_zeta);
-	gsl_matrix_free(mats0.Gamma);
-	gsl_matrix_free(mats0.var_eta);
 
 	return status;
 }
@@ -4490,9 +4491,9 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 	//status += pca(residzz, Nfac, 0, loadings, facs);
 
 	double rhoZ 	= gsl_stats_lag1_autocorrelation(mon_Z->data,mon_Z->stride,mon_Z->size);
-	double sig_eps = 0.0;
+	double sig_eps2 = 0.0;
 	for(t=1;t<T+1;t++)
-		sig_eps += pow(gsl_vector_get(mon_Z,t)-rhoZ*gsl_vector_get(mon_Z,t-1),2)
+		sig_eps2 += pow(gsl_vector_get(mon_Z,t)-rhoZ*gsl_vector_get(mon_Z,t-1),2)
 						/((double)T);
 	status += gsl_matrix_set_col(xreg, Noccs*(Nfac+1), vzztm1);
 
@@ -4562,7 +4563,7 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 		status += VARest(facs,mats->Gamma, mats->var_eta);
 
 	// assign values:
-	mats->sig_eps2 	= sig_eps;
+	mats->sig_eps2 	= sig_eps2;
 	mats->rhozz 	= gsl_vector_get(coefregs,Noccs*(Nfac+1));
 	mats->rhoZ		= rhoZ;
 	gsl_vector_view vLambda = gsl_vector_subvector(coefregs,0,Noccs*(Nfac+1));
@@ -4644,11 +4645,30 @@ int alloc_econ(struct st_wr * st){
 	st->xss = gsl_matrix_calloc(Noccs+1,Noccs+2);
 
 	// allocate system coefficients and transform:
-	st->sys = malloc(sizeof(struct sys_coef));
-	st->sol = malloc(sizeof(struct sys_sol));
-	st->sim = malloc(sizeof(struct aux_coef));
-
+	st->sys  = malloc(sizeof(struct sys_coef));
+	st->sol  = malloc(sizeof(struct sys_sol));
+	st->sim  = malloc(sizeof(struct aux_coef));
+	st->mats = malloc(sizeof(struct shock_mats));
 	(st->sys)->COV = malloc(sizeof(double)*(Ns+Nc));
+
+	//setup shock matrices and initialize
+	(st->mats)->Lambda   = gsl_matrix_calloc(Noccs,Nfac+1);
+	(st->mats)->Gamma    = gsl_matrix_calloc(Nfac,Nfac);
+	(st->mats)->var_eta  = gsl_matrix_calloc(Nfac,Nfac);
+	(st->mats)->var_zeta = gsl_matrix_calloc(Noccs,Noccs);
+
+	gsl_matrix_memcpy((st->mats)->Gamma,GammaCoef);
+	gsl_matrix_memcpy(st->mats->var_eta , var_eta);
+	gsl_matrix_memcpy(st->mats->var_zeta , var_zeta);
+	st->mats->rhoZ	= rhoZ;
+	st->mats->rhozz	= rhozz;
+	st->mats->sig_eps2 = sig_eps;
+
+	gsl_matrix_view LC = gsl_matrix_submatrix(st->mats->Lambda,0,0,Noccs,Nfac*(Nllag+1));
+	gsl_matrix_memcpy(&LC.matrix,LambdaCoef);
+	LC = gsl_matrix_submatrix(st->mats->Lambda,0,Nfac*(Nllag+1),Noccs,1);
+	gsl_matrix_memcpy(&LC.matrix,LambdaZCoef);
+
 /*
  * System is:
  * 	A0 s =  A1 Es'+ A2 c + A3 Z
@@ -4690,6 +4710,10 @@ int alloc_econ(struct st_wr * st){
 	(st->sim)->moment_weights 	= gsl_matrix_calloc(2,6); // pick some moments to match
 	(st->sim)->draws 			= gsl_matrix_calloc(simT,Nx); // do we want to make this nsim x simT
 	(st->sim)->fd_hist_dat		= gsl_matrix_calloc(simT,Noccs);
+
+	//simulate the data
+	st->sim->fd_hist_dat = gsl_matrix_alloc(simT,Noccs);
+	fd_dat_sim(st->sim->fd_hist_dat,fd_mats);
 
 	randn((st->sim)->draws,6071984);
 	if(printlev>2)
@@ -4754,9 +4778,15 @@ int free_econ(struct st_wr * st){
 	gsl_matrix_free( (st->sim)->moment_weights);
 	gsl_matrix_free( (st->sim)->draws );
 	gsl_matrix_free( (st->sim)->fd_hist_dat);
+	gsl_matrix_free( (st->mats->Gamma));
+	gsl_matrix_free( (st->mats->Lambda));
+	gsl_matrix_free( (st->mats->var_eta));
+	gsl_matrix_free( (st->mats->var_zeta));
+
 	free(st->sys);
 	free(st->sol);
 	free(st->sim);
+	free(st->mats);
 	free((st->sys)->COV);
 
 	return status;
@@ -5010,13 +5040,7 @@ double bndCalMinwrap(double (*Vobj)(unsigned n, const double *x, double *grad, v
 
 	alloc_econ(ss);
 	// this is just a checker: the idea was to leave ss and move around parameters
-	/*status 	= sol_ss(ss->ss,ss->xss,ss->sol);
-	if(printlev>=0 && status>=1) printf("Steady state not solved \n");
-	status += sys_def(ss->ss,ss->sys);
-	if(printlev>=0 && status>=1) printf("System not defined\n");
-	status += sol_dyn(ss->ss,ss->sol,ss->sys);
-	if(printlev>=0 && status>=1) printf("System not solved\n");
-	 */
+
 
 	if(alg0%10==0 && alg0<100)
 		opt0 = nlopt_create(NLOPT_LN_NELDERMEAD,n);
@@ -5501,6 +5525,7 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 	struct aux_coef  * simdat	=  st->sim;
 	struct sys_coef  * sys		= st->sys;
 	struct sys_sol   * sol		= st->sol;
+	struct shock_mats* mats0	= st->mats;
 	gsl_matrix * xss = st->xss;
 	gsl_vector * ss = st->ss;
 	double dist;
@@ -5511,13 +5536,13 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 
 	status 	= sol_ss(ss,NULL,xss,sol);
 	if(printlev>=0 && status>=1) printf("Steady state not solved \n");
-	status += sys_def(ss,sys);
+	status += sys_def(ss,sys,mats0);
 	if(printlev>=0 && status>=1) printf("System not defined\n");
 	status += sol_dyn(ss,sol,sys,0);
 	if(printlev>=0 && status>=1) printf("System not solved\n");
 
 	if(status == 0){
-		status += sol_zproc(st,ss,xss);
+		status += sol_zproc(st,ss,xss,mats0);
 		status += sim_moments(st,ss,xss);
 		Nsolerr =0;
 	}
