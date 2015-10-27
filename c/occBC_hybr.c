@@ -79,7 +79,6 @@ double shist[]  = {1.0,1.0,1.0,1.0,1.0,1.0};
 
 //declare some parameters
 int const Noccs	= 22;
-int const Nind 	= 21;
 int const Nfac	= 2;// how many factors in the z_i model?
 int const Nllag	= 0;// how many lags in lambda
 int const Nglag	= 1;// how many lags in gamma
@@ -111,7 +110,7 @@ double 	tau 	= 0.041851;
 double 	scale_s	= 0.026889;
 double 	shape_s	= 0.194987;
 double 	effic	= 0.495975;
-double 	chi_co[]= {-1.45,-1.25,-0.717312};
+double 	chi_co[]= {-1.45,-1.25,-0.717312,0. };
 
 
 double rhoZ		= 0.9621;
@@ -137,7 +136,7 @@ double avg_sdsep= 0.01256;	//the average standard deviation of sld across occupa
 double med_dr	= 13;
 double chng_pr	= 0.45;
 
-double sk_wg[]	= {-.364435,-.2963078,-.0504365};
+double* sk_wg;
 double Zfcoef[] = {0.0233,-0.0117};
 			// old : {-0.0028,-0.0089,0.0355,0.0083};
 
@@ -282,7 +281,7 @@ int main(int argc,char *argv[]){
 
 	omp_set_num_threads(Nthread);
 	//initialize parameters
-	Nskill = 2;
+	Nskill = 4;
 #ifdef _MKL_USE
 	printf("Begining, Calflag = %d, USE_MKL=%d,USE_DFBOLS=%d\n",calflag,_MKL_USE,_DFBOLS_USE);
 #endif
@@ -295,21 +294,21 @@ int main(int argc,char *argv[]){
 	fscanf(readparams,"%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",&phi,&sig_psi,&tau,&scale_s,&shape_s,&effic,&chi_co[0],&chi_co[1],&chi_co[2]);
 	fclose(readparams);
 	printf("%f,%f,%f,%f,%f,%f",phi,sig_psi,tau,scale_s,shape_s,effic);
-	for(i=0;i<Nskill;i++)
-		printf(",%f",chi_co[i]);
-	printf("\n");
-	b	= malloc(sizeof(double)*2);
-	chi = malloc(sizeof(double*)*Noccs+1);
+
+	sk_wg = malloc(sizeof(double)*Nskill);
+	b	  = malloc(sizeof(double)*2);
+	chi   = malloc(sizeof(double*)*Noccs+1);
 	for(l=0;l<Noccs+1;l++)
 		chi[l] = malloc(sizeof(double*)*Noccs);
-	// this is just to initialize
-	double chi_coef0[] ={-3.323152,-3.503544,-2.079600};
-		/*	{ // these come from the solution in matlab, where weights are equal for all possible switches and w=chi
-			   -0.9014,
-			   -0.8336,
-			   -0.5038};
-		*/
-	set_params(chi_co, 2);
+	// read in chi_co to initialize
+	double chi_co_read[Nskill];
+	FILE * readchi = fopen("chi_co.csv","r+");
+	fscanf(readchi,"%lf,%lf,%lf,%lf",&chi_co_read[0],&chi_co_read[1],&chi_co_read[2],&chi_co_read[3]);
+	fclose(readchi);
+
+	for(l=0;l<Nskill;l++) sk_wg[l] = chi_co_read[l];
+
+	set_params(chi_co_read, 2);
 	if(fabs(calflag)==3){
 		double x3[] = {phi,scale_s,shape_s,effic};
 		set_params(x3,3);
@@ -387,9 +386,9 @@ int main(int argc,char *argv[]){
 
 	/* Calibration Loop!
 	*/
-	double x0_0[]	= {phi	,sig_psi	,tau	,scale_s	,shape_s	,effic,	chi_co[0]	,chi_co[1]	,chi_co[2]};
-	double lb_0[]	= {0.25	,0.00005	,0.005	,0.035		,0.015		,0.5	,-3.0			,-3.0			,-2.0	};
-	double ub_0[]	= {0.6	,0.25		,0.2	,0.15		,0.20		,1.35	,.00			,.00			,.00	};
+	double x0_0[]	= {phi	,sig_psi	,tau	,scale_s	,shape_s	,effic,	chi_co_read[0]	,chi_co_read[1]	,chi_co_read[2]	,chi_co_read[3]	};
+	double lb_0[]	= {0.25	,0.00005	,0.005	,0.035		,0.015		,0.5	,0.0			,0.0			,0.0			,-1.0};
+	double ub_0[]	= {0.6	,0.25		,0.2	,0.15		,0.20		,1.35	,1.0			,1.0			,1.0			, 0.0};
 
 	int Ntotx = sizeof(x0_0)/sizeof(double);
 	for(i=0;i<Ntotx;i++){
@@ -567,7 +566,7 @@ int main(int argc,char *argv[]){
 	if(verbose>=0 && status >=1) printf("System not solved\n");
 	if(verbose>=0 && status ==0) printf("System successfully solved\n");
  	// update and solve the stochastic process
-//	status += sol_zproc(st, st->ss, st->xss);
+	status += sol_zproc(st, st->ss, st->xss,st->mats);
 
 
 	//status += ss_moments(&simdat, ss, xss);
@@ -599,6 +598,7 @@ int main(int argc,char *argv[]){
 	gsl_matrix_free(fd_mats->var_eta);
 	gsl_matrix_free(fd_mats->var_zeta);
 	free(fd_mats);
+	free(sk_wg);
 
 	return status;
 }
@@ -1655,10 +1655,10 @@ int sys_ex_set(gsl_matrix * N, gsl_matrix * S,struct shock_mats * mats){
 		gsl_matrix_set(N1,Nagf+Nfac+f,Nagf+f,1.0);
 	/*
 	 * Fourth partition, N1_32 =
-	 * Lambda_{1:(Nflag-1)}
+	 * Lambda_{1:(Nllag-1)}
 	 */
 	if(Nllag>0){
-		gsl_matrix_view N1_Lambda = gsl_matrix_submatrix(&Lambdarf.matrix, 0, Nfac, LambdaCoef->size1, LambdaCoef->size2-Nfac);
+		gsl_matrix_view N1_Lambda = gsl_matrix_submatrix(&Lambdarf.matrix, 0, Nfac, Noccs, Nfac*(Nllag+1)-Nfac);
 		set_matrix_block(N1,&N1_Lambda.matrix,Notz,1+Nagf);
 	}
 	/*
@@ -2755,14 +2755,14 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 	m_Zz	= 0.0;
 
 	// allocate stuff for the regressions:
-	gsl_matrix * XX = gsl_matrix_calloc((Noccs-2)*Nl+1,Nskill+1);
+	gsl_matrix * XX = gsl_matrix_calloc((Noccs-2)*Nl+1,Nskill);
 	gsl_vector_view X0 = gsl_matrix_column(XX,Nskill);
 	gsl_vector_set_all(&X0.vector,1.0);
 
 	gsl_matrix * Wt	= gsl_matrix_calloc((Noccs-2)*Nl+1,(Noccs-2)*Nl+1);
 	gsl_vector * yloss = gsl_vector_alloc((Noccs-2)*Nl);
-	gsl_vector * coefs	= gsl_vector_calloc(Nskill + 1);
-	gsl_vector * coefs_di	= gsl_vector_calloc(Nskill + 1);
+	gsl_vector * coefs	= gsl_vector_calloc(Nskill );
+	gsl_vector * coefs_di	= gsl_vector_calloc(Nskill );
 	gsl_vector * er = gsl_vector_alloc(yloss->size);
 
 	// Take a draw for Zz and initialize things for init_T periods
@@ -3059,9 +3059,11 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 						if(gsl_finite(ylossld) && ylossld<0.0 && wgt>1e-5 && gsl_finite(wgt)){
 							gsl_matrix_set(Wt,Xrow,Xrow,wgt);
 							gsl_vector_set(yloss,Xrow,ylossld);
-							for(si=0;si<Nskill;si++)
+							for(si=0;si<Nskill-1;si++)
 								gsl_matrix_set(XX,Xrow,si,
 									(gsl_matrix_get(f_skills,d,si+1)-gsl_matrix_get(f_skills,l-1,si+1) ));
+							gsl_matrix_set(XX,Xrow,Nskill-1, 1.);
+
 							Xrow++;
 						}
 					}
@@ -4500,9 +4502,9 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 	double lambda_mean = 0.0,lambda_scale = 0.0;
 	if(fix_fac!=1){
 		for(c=0;c<Noccs;c++)
-			lambda_mean += gsl_matrix_get(LambdaCoef,c,0)/(double)Noccs;
+			lambda_mean += gsl_matrix_get(fd_mats->Lambda,c,0)/(double)Noccs;
 		for(c=0;c<Noccs;c++)
-			lambda_scale += pow(gsl_matrix_get(LambdaCoef,c,0)-lambda_mean,2)/(double)Noccs;
+			lambda_scale += pow(gsl_matrix_get(fd_mats->Lambda,c,0)-lambda_mean,2)/(double)Noccs;
 		lambda_scale = sqrt(lambda_scale);
 	}
 	if(fix_fac==1)
@@ -4657,17 +4659,19 @@ int alloc_econ(struct st_wr * st){
 	(st->mats)->var_eta  = gsl_matrix_calloc(Nfac,Nfac);
 	(st->mats)->var_zeta = gsl_matrix_calloc(Noccs,Noccs);
 
-	gsl_matrix_memcpy((st->mats)->Gamma,GammaCoef);
-	gsl_matrix_memcpy(st->mats->var_eta , var_eta);
-	gsl_matrix_memcpy(st->mats->var_zeta , var_zeta);
-	st->mats->rhoZ	= rhoZ;
-	st->mats->rhozz	= rhozz;
-	st->mats->sig_eps2 = sig_eps;
+	//initialize the shock matrices with the value that corresponds to occupation finding rates
+	gsl_matrix_memcpy((st->mats)->Gamma,fd_mats->Gamma);
+	gsl_matrix_memcpy(st->mats->var_eta , fd_mats->var_eta);
+	gsl_matrix_memcpy(st->mats->var_zeta , fd_mats->var_zeta);
+	st->mats->rhoZ	= fd_mats->rhoZ;
+	st->mats->rhozz	= fd_mats->rhozz;
+	st->mats->sig_eps2 = fd_mats->sig_eps2;
+	gsl_matrix_memcpy(st->mats->Lambda,fd_mats->Lambda);
 
-	gsl_matrix_view LC = gsl_matrix_submatrix(st->mats->Lambda,0,0,Noccs,Nfac*(Nllag+1));
+	/*gsl_matrix_view LC = gsl_matrix_submatrix(st->mats->Lambda,0,0,Noccs,Nfac*(Nllag+1));
 	gsl_matrix_memcpy(&LC.matrix,LambdaCoef);
 	LC = gsl_matrix_submatrix(st->mats->Lambda,0,Nfac*(Nllag+1),Noccs,1);
-	gsl_matrix_memcpy(&LC.matrix,LambdaZCoef);
+	gsl_matrix_memcpy(&LC.matrix,LambdaZCoef);*/
 
 /*
  * System is:
@@ -4725,7 +4729,7 @@ int alloc_econ(struct st_wr * st){
 	gsl_matrix_set((st->sim)->data_moments,0,3,avg_urt);
 	gsl_matrix_set((st->sim)->data_moments,0,4,avg_elpt);
 	gsl_matrix_set((st->sim)->data_moments,0,5,avg_sdsep);
-	// row 2 are the coefficients on 4 skills and a constant
+	// row 2 are the coefficients on 3 skills and a constant
 	for(i=0;i<Nskill;i++)
 		gsl_matrix_set((st->sim)->data_moments,1,i,sk_wg[i]);
 
@@ -5450,10 +5454,10 @@ int set_params(const double * x, int cal_set){
 		for(l=1;l<Noccs+1;l++){
 			for(d=0;d<Noccs;d++){
 				chi[l][d] = 0.0;
-				for(i=0;i<Nskill;i++){
+				for(i=0;i<Nskill-1;i++){
 					chi[l][d] += x[param_offset+i]*(gsl_matrix_get(f_skills,d,i+1) - gsl_matrix_get(f_skills,l-1,i+1));
 				}
-				//chi[l][d] += 1.0;
+				chi[l][d] += x[param_offset+Nskill-1];
 				chi[l][d] 	= exp(chi[l][d]);
 				//chi[l][d] += x[param_offset+Nskill];
 			}
