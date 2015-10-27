@@ -551,6 +551,12 @@ int readmat(char* name, gsl_matrix * mat){
 				if(rstatus==0){
 					rstatus = fscanf(f,"%lf\n",&dd);
 				}
+				if(rstatus==0){
+					rstatus = fscanf(f,"%lf,\n",&dd);
+				}
+				if(rstatus==0){
+					rstatus = fscanf(f,"%lf \n",&dd);
+				}
 				if(rstatus==0)
 					printf("Error, did not read from %s\n",name);
 

@@ -55,7 +55,7 @@ int printlev 	= 3;
 int rescale_var	= 0;
 int check_fin	= 0;
 int use_anal	= 1; // this governs whether the perturbation uses analytic derivatives
-int fix_fac		= 1; // this allows f_t to be free when estimating.  o.w. the path of f_t, gamma and var_eta are fixed.
+int fix_fac		= 0; // this allows f_t to be free when estimating.  o.w. the path of f_t, gamma and var_eta are fixed.
 int opt_alg		= 3; // 10x => Nelder-Meade, 5x => Subplex, 3x => DFBOLS, o.w => BOBYQA
 int polish_alg	= 0;
 double ss_tol	= 1e-7; // tighten this with iterations?
@@ -78,7 +78,7 @@ double shist[]  = {1.0,1.0,1.0,1.0,1.0,1.0};
 
 
 //declare some parameters
-int const Noccs	= 22;
+int const Noccs	= 18;
 int const Nfac	= 2;// how many factors in the z_i model?
 int const Nllag	= 0;// how many lags in lambda
 int const Nglag	= 1;// how many lags in gamma
@@ -320,12 +320,12 @@ int main(int argc,char *argv[]){
 	fd_mats->Lambda = gsl_matrix_calloc(Noccs,Nfac+1);
 	fd_mats->var_eta = gsl_matrix_calloc(Nfac,Nfac);
 	fd_mats->var_zeta= gsl_matrix_calloc(Noccs,Noccs);
-	readmat("Gamma_fd.csv",fd_mats->Gamma);
-	readmat("Lambda_fd.csv",fd_mats->Lambda);
-	readmat("var_eta_fd.csv",fd_mats->var_eta);
-	readmat("var_zeta_fd.csv",fd_mats->var_zeta);
+	status += readmat("Gamma_fd.csv",fd_mats->Gamma);
+	status += readmat("Lambda_fd.csv",fd_mats->Lambda);
+	status += readmat("var_eta_fd.csv",fd_mats->var_eta);
+	status += readmat("var_zeta_fd.csv",fd_mats->var_zeta);
 	FILE * readfdparams = fopen("params_in_fd.csv","r+");
-	fscanf(readfdparams, "%lf,%lf,%lf",fd_mats->rhoZ,fd_mats->rhozz,fd_mats->sig_eps2);
+	fscanf(readfdparams, "%lf,%lf,%lf",&fd_mats->rhoZ,&fd_mats->rhozz,&fd_mats->sig_eps2);
 	fclose(readfdparams);
 
 
@@ -1042,15 +1042,15 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 				// gld
 				
 				// calculate choice probs and integrate to be sure all options integrate to 1:
-				double sexpret_dd =0.0;
-				gsl_function gprob;
-				gprob.function = &hetero_ev;
-				gprob.params = R_dP_ld;
 				for(dd=0;dd<Noccs;dd++){ // values in any possible direction
 					double ret_d_dd = gsl_vector_get(ret_d,dd);
 					R_dP_ld[dd+1] =  ret_d_dd > 0 &&  ret_d_dd < 1.e10 ? ret_d_dd : 0.0;
 					R_dP_ld[dd+1+Noccs] = sig_psi*gsl_matrix_get(pld,l+ll*(Noccs+1),dd);
-				}				
+				}
+				double sexpret_dd =0.0;
+				gsl_function gprob;
+				gprob.function = &hetero_ev;
+				gprob.params = R_dP_ld;
 				for(d=0;d<Noccs;d++){ // choice probabilities
 					R_dP_ld[0] = (double)d;
 					double gg,ggerr;
@@ -3760,18 +3760,21 @@ int TGR(struct st_wr * st){
 int fd_dat_sim(gsl_matrix * fd_hist_dat, struct shock_mats * fd_mats){
 	int status,simT, t,d,dd,fi;
 	status =0;
-	gsl_matrix *zeta_draw, *eta_draw,*Zf_hist,*Zfd_hist;
+	gsl_matrix *zeta_draw, *eta_draw;
 	gsl_matrix *chol_varzeta,*chol_vareta;
 	gsl_matrix *fd_fac;
 	gsl_vector *fd_ag, *epsilon_draw,*fd_fac_tm1;
 	simT = fd_hist_dat->size1;
 
-	zeta_draw = gsl_matrix_calloc(simT,Noccs);
+	zeta_draw    = gsl_matrix_calloc(simT,Noccs);
 	epsilon_draw = gsl_vector_calloc(simT);
-	eta_draw = gsl_matrix_calloc(simT,Nfac);
-	fd_ag = gsl_vector_calloc(simT);
-	fd_fac = gsl_matrix_calloc(simT,Nfac);
-	fd_fac_tm1 = gsl_vector_calloc(Nfac);
+	eta_draw     = gsl_matrix_calloc(simT,Nfac);
+	fd_ag        = gsl_vector_calloc(simT);
+	fd_fac       = gsl_matrix_calloc(simT,Nfac);
+	fd_fac_tm1   = gsl_vector_calloc(Nfac);
+	chol_varzeta = gsl_matrix_calloc(Noccs,Noccs);
+	chol_vareta  = gsl_matrix_calloc(Nfac,Nfac);
+
 	randn(zeta_draw,9041987);
 	gsl_matrix_view epsilon_draw_mat = gsl_matrix_view_vector(epsilon_draw,1,simT);
 	randn( &(epsilon_draw_mat.matrix),12281951);
@@ -3845,6 +3848,8 @@ int fd_dat_sim(gsl_matrix * fd_hist_dat, struct shock_mats * fd_mats){
 	gsl_matrix_free(fd_fac);
 	gsl_vector_free(fd_ag);
 	gsl_vector_free(fd_fac_tm1);
+	gsl_matrix_free(chol_varzeta);
+	gsl_matrix_free(chol_vareta);
 	return status;
 }
 
@@ -3861,6 +3866,10 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 	int Wl0_i = 0;
 	int Wld_i = Wl0_i + Nl;
 	int ss_gld_i,ss_Wld_i,ss_Wl0_i;
+	double * ret_d = malloc(Noccs*sizeof(double));
+	double *R_dP_ld	= malloc(sizeof(double)*Noccs*2+1);
+	gsl_integration_workspace * integw = gsl_integration_workspace_alloc(1000);
+
 		// indices where these things are
 		ss_Wl0_i	= 0;//ss_x_i + pow(Noccs+1,2);
 		ss_Wld_i	= ss_Wl0_i + Nl;
@@ -3893,9 +3902,6 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 	}
 	for(l=0;l<Noccs+1;l++){
 		double bl = l>0 ? b[1]:b[0];
-		double * ret_d = malloc(Noccs*sizeof(double));
-		double *R_dP_ld	= malloc(sizeof(double)*Noccs*2+1);
-		gsl_integration_workspace * integw = gsl_integration_workspace_alloc(1000);
 		for(ll=0;ll<2;ll++){
 			for(d=0;d<Noccs;d++){
 				double nud = l == d+1? 0. : nu;
@@ -3908,16 +3914,15 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 					+ (1.-1./bdur)*Es->data[Wl0_i + l+ll*(Noccs+1)] + 1./bdur*Es->data[Wl0_i + l+Noccs+1];
 				ret_d[d]	*= gsl_matrix_get(pld,l+ll*(Noccs+1),dd);
 			}
-
-			double sexpret_dd =0.;
-			gsl_function gprob;
-			gprob.function = &hetero_ev;
-			gprob.params = R_dP_ld;
 			for(dd=0;dd<Noccs;dd++){ // values in any possible direction
 				double ret_d_dd = ret_d[dd];
 				R_dP_ld[dd+1] =  ret_d_dd > 0. &&  ret_d_dd < 1.e10 ? ret_d_dd : 0.;
 				R_dP_ld[dd+1+Noccs] = sig_psi*gsl_matrix_get(pld,l+ll*(Noccs+1),dd);
 			}
+			double sexpret_dd =0.;
+			gsl_function gprob;
+			gprob.function = &hetero_ev;
+			gprob.params = R_dP_ld;
 			for(d=0;d<Noccs;d++){ // choice probabilities
 				R_dP_ld[0] = (double)d;
 				double gg,ggerr;
@@ -3951,9 +3956,6 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 				}
 			}
 		}
-		gsl_integration_workspace_free(integw);
-		free(ret_d);
-		free(R_dP_ld);
 	}
 	/*
 	for(l=0;l<Noccs+1;l++){
@@ -4004,7 +4006,10 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 
 	gsl_vector_free(Es);
 	gsl_matrix_free(pld);
-	
+	free(ret_d);
+	free(R_dP_ld);
+	gsl_integration_workspace_free(integw);
+
 	return status;
 }
 int spol(gsl_matrix * sld, const gsl_vector * ss, const struct sys_coef * sys, const struct sys_sol * sol, const gsl_vector * Zz){
@@ -4739,10 +4744,10 @@ int alloc_econ(struct st_wr * st){
 	gsl_matrix_set((st->sim)->moment_weights,0,3,5.0);
 	gsl_matrix_set((st->sim)->moment_weights,0,4,1.0);
 	gsl_matrix_set((st->sim)->moment_weights,0,5,1.0);
+	for(i=0;i<Nskill-1;i++)
+		gsl_matrix_set((st->sim)->moment_weights,1,i,1.0);
+	gsl_matrix_set((st->sim)->moment_weights,1,Nskill-1,1.0);
 
-	gsl_matrix_set((st->sim)->moment_weights,1,0,1.0);
-	gsl_matrix_set((st->sim)->moment_weights,1,1,1.0);
-	gsl_matrix_set((st->sim)->moment_weights,1,2,1.0);
 
 
 	return status;
@@ -4861,26 +4866,28 @@ double dinvq(const double q){
 
 
 double hetero_ev(double eps, void * Vp_in){
-	int i,j, pj;
+	int i,j, pj, pi;
 	// Vp has Noccs*2 + 1 values.  The first value is the index of the probability we're choosing (i) and the rest are the Values and then the scale parameters
-	double intval;
+	double intval, val;
 	double * Vp = (double*) Vp_in;
 	
 	intval = 0;
 	i = (int) Vp[0];
+	pi = i+1+Noccs;
 	for(j=0;j<Noccs;j++){
 		pj = j+1+Noccs;
-		intval = Vp[pj] > 0. && Vp[j+1] > 0. ?
-			exp( -(Vp[i+1] - Vp[j+1] + eps*Vp[i+1+Noccs])/Vp[pj] ) + intval 
+		intval = Vp[pj] > 0. && Vp[j+1] > 0. && i != j ?
+			exp( -(Vp[i+1] - Vp[j+1] + eps*Vp[pi])/Vp[pj] ) + intval
 			: intval;
 	}
-	intval = exp(-intval)*exp(-eps);
+	//			Lambda					lambda <- Following language of Bhat (1995)
+	intval = exp(-intval)*exp(-eps)*exp(-exp(-eps))*exp(-eps);
 	return intval;
 }
 
 
 double dhetero_ev(double eps, void * Vp_in){
-	int i,j,k, pj;
+	int i,j,k,pi, pj;
 	// Vp has Noccs*2 + 2 values.  The first value is the index of the probability we're choosing and the rest are the Values and then the scale parameters
 	double intval;
 	double * Vp = (double*) Vp_in;
@@ -4888,13 +4895,14 @@ double dhetero_ev(double eps, void * Vp_in){
 	intval = 0;
 	i = (int) Vp[0];
 	k = (int) Vp[1];
+	pi = i+2+Noccs;
 	for(j=0;j<Noccs;j++){
 		pj = j+2+Noccs;
-		intval = Vp[pj] > 0. && Vp[j+1] > 0. ?
-			exp( -(Vp[i+2] - Vp[j+2] + eps*Vp[i+2+Noccs])/Vp[pj] ) + intval 
+		intval = Vp[pj] > 0. && Vp[j+1] > 0. && i != j ?
+			exp( -(Vp[i+2] - Vp[j+2] + eps*Vp[pi])/Vp[pj] ) + intval
 			: intval;
 	}
-	intval = exp(-intval)*exp(-eps);
+	intval = exp(-intval)*exp(-eps)*exp(-exp(-eps))*exp(-eps);
 	intval *= -1./Vp[k+2+Noccs]*exp(-(Vp[i+2]-Vp[k+2]-eps*Vp[i+2+Noccs])/Vp[k+2+Noccs] );
 	return intval;
 }
