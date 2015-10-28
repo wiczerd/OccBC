@@ -359,6 +359,11 @@ int main(int argc,char *argv[]){
 				if(d!=l) gsl_matrix_set(var_zeta,l,d,0.0);
 			}
 		}
+		for(l=0;l<var_zeta->size1;l++){
+			for(d=0;d<var_zeta->size2;d++)
+				if(d!=l) gsl_matrix_set(fd_mats->var_zeta,l,d,0.);
+		}
+
 	}
 	else // arbitrary, potentially non-diagonal
 		readmat("var_zeta.csv",var_zeta);
@@ -566,10 +571,10 @@ int main(int argc,char *argv[]){
 	status += sol_dyn(st->ss, st->sol,st->sys,0);
 	if(verbose>=0 && status >=1) printf("System not solved\n");
 	if(verbose>=0 && status ==0) printf("System successfully solved\n");
- 	/* update and solve the stochastic process
+ 	// update and solve the stochastic process
 	status += sol_zproc(st, st->ss, st->xss,st->mats);
 
-
+	/*
 	//status += ss_moments(&simdat, ss, xss);
 	if(status ==0)
 		status += sim_moments(st,st->ss,st->xss);
@@ -2430,6 +2435,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 	gsl_matrix * x		= gsl_matrix_alloc(Noccs+1,Noccs+2);
 	gsl_matrix * xp		= gsl_matrix_alloc(Noccs+1,Noccs+2);
+	gsl_matrix * xhist  = gsl_matrix_alloc(simT, Noccs+2);
 
 	gsl_vector * zz_invtheta = gsl_vector_calloc(Noccs);
 	gsl_matrix * zhist	= gsl_matrix_alloc(simT,Noccs);
@@ -2468,7 +2474,8 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 
 	int printlev_old 	= printlev;
-	printlev = printlev_old>1 ? 1: printlev_old;
+	/////////////////////////////////////////////////////////////
+	//printlev = printlev_old>1 ? 1: printlev_old;
 	int verbose_old 	= verbose;
 	verbose  = verbose_old > 1 ? 1 : verbose_old;
 
@@ -2485,6 +2492,9 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			status += xprime(xp,ss,sys,sol,x,Zz);
 
 			gsl_matrix_memcpy(x,xp);
+			double urtp = 0.0;
+			for(l=0;l<Noccs+1;l++)
+				urtp += gsl_matrix_get(xp,l,0)+gsl_matrix_get(xp,l,Noccs+1);
 
 			gsl_vector_view Zdraw = gsl_matrix_row(simdat->draws,di);
 
@@ -2493,6 +2503,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			gsl_vector_add(Zzl,shocks);
 			gsl_vector_memcpy(Zz,Zzl);
 		}
+		gsl_matrix_set_zero(xhist);
 		for(di=0;di<simT;di++){
 			gsl_vector_view Zdraw = gsl_matrix_row(simdat->draws,di);
 
@@ -2514,6 +2525,14 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			status += gpol(sol->gld, ss, sys, sol, Zz);
 			status += spol(sol->sld, ss, sys, sol, Zz);
 			status += xprime(xp,ss,sys,sol,x,Zz);
+			//////////////////////////////////////////////////////////////////////
+			//if( printlev>= 2){
+				for(d=0;d<Noccs+2;d++){
+					for(l=0;l<Noccs+1;l++)
+					gsl_matrix_set(xhist,di,d,gsl_matrix_get(xhist,di,d)+gsl_matrix_get(xp,l,d));
+				}
+			//}
+
 			// calculate the unemployment rate:
 			double urtp = 0.0;
 			for(l=0;l<Noccs+1;l++)
@@ -2607,7 +2626,9 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 		double zdist_i = 0.0;
 		gsl_matrix_sub(zhist0,zhist);
-		if(printlev>=4){
+		//if(printlev>=4){
+			printmat("zhist_in.csv",zhist);
+			printmat("xhist.csv",xhist);
 			printmat("zhist_dist.csv",zhist0);
 			if(fix_fac!=1){
 				printmat("GammaSol.csv",mats1.Gamma);
@@ -2615,7 +2636,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			}
 			printmat("LambdaSol.csv",mats1.Lambda);
 			printmat("var_zetaSol.csv",mats1.var_zeta);
-		}
+		//}
 		int NTz = zhist0->size1*zhist0->size2;
 		for(d=0;d<NTz;d++)
 			zdist_i += pow(zhist0->data[d],2)/(double)NTz;
@@ -2652,6 +2673,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 	gsl_vector_free(Zz);gsl_vector_free(Zzl);gsl_vector_free(shocks);
 	gsl_vector_free(zz_invtheta);
 
+	gsl_matrix_free(xhist);
 	gsl_matrix_free(zhist);gsl_matrix_free(zhist0);
 	gsl_vector_free(Zhist);
 	gsl_vector_free(zdist_hist);
@@ -3943,19 +3965,19 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 				}
 				else
 					gsl_matrix_set(gld, l + ll * (Noccs + 1), d, 0.);
-
 			}
 
 			// check it was pretty close to 1
-			if(sexpret_dd < 1-1.e-2){
-				if (sexpret_dd>0.){
-					for(d=0;d<Noccs;d++) gsl_matrix_set(gld,l+ll*(Noccs+1),d,gsl_matrix_get(gld,l+ll*(Noccs+1),d)/sexpret_dd);
-				}
+			if (sexpret_dd>0.){
+				for(d=0;d<Noccs;d++) gsl_matrix_set(gld,l+ll*(Noccs+1),d,gsl_matrix_get(gld,l+ll*(Noccs+1),d)/sexpret_dd);
+			}
+
+			if(fabs(sexpret_dd -1)>1.e-2){
 				solerr = fopen(soler_f,"a+");
-				fprintf(solerr,"In gpol, SS choice probabilities not add to 1 at (l,d)=(%d,%d)\n",l,dd);
+				fprintf(solerr,"In gpol, SS choice probabilities add to %f != 1 at (l,d)=(%d,%d)\n",sexpret_dd,l,dd);
 				fclose(solerr);
 				if(verbose>=2)
-					printf("In gpol, SS choice probabilities not add to 1 at (l,d)=(%d,%d)\n",l,dd);
+					printf("In gpol, SS choice probabilities add to %f != 1 at (l,d)=(%d,%d)",sexpret_dd,l,dd);
 			}
 			if (sexpret_dd<1e-2){
 				if(l>0){
@@ -4315,6 +4337,7 @@ int xprime(gsl_matrix * xp, gsl_vector * ss, const struct sys_coef * sys, const 
 	if(printlev>=2){
 		urt = 0.0;
 		for(l=0;l<Noccs+1;l++){
+			// short-term and long-term unemployed
 			urt+=gsl_matrix_get(x,l,0)+gsl_matrix_get(x,l,Noccs+1);
 		}
 	}
