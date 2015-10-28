@@ -297,9 +297,10 @@ int main(int argc,char *argv[]){
 
 	sk_wg = malloc(sizeof(double)*Nskill);
 	b	  = malloc(sizeof(double)*2);
-	chi   = malloc(sizeof(double*)*Noccs+1);
+	chi   = malloc((Noccs+1)*sizeof(double*));
 	for(l=0;l<Noccs+1;l++)
-		chi[l] = malloc(sizeof(double*)*Noccs);
+		chi[l] = malloc(sizeof(double)*Noccs);
+
 	// read in chi_co to initialize
 	double chi_co_read[Nskill];
 	FILE * readchi = fopen("chi_co.csv","r+");
@@ -565,7 +566,7 @@ int main(int argc,char *argv[]){
 	status += sol_dyn(st->ss, st->sol,st->sys,0);
 	if(verbose>=0 && status >=1) printf("System not solved\n");
 	if(verbose>=0 && status ==0) printf("System successfully solved\n");
- 	// update and solve the stochastic process
+ 	/* update and solve the stochastic process
 	status += sol_zproc(st, st->ss, st->xss,st->mats);
 
 
@@ -581,7 +582,7 @@ int main(int argc,char *argv[]){
 
 	if(status ==0)
 		status +=  TGR(st);//TGR(u_dur_dist,opt_dur_dist,fnd_dist,opt_fnd_dist,&urt,&opt_urt,st);
-
+	*/
 
 	status += free_econ(st);
 
@@ -1042,6 +1043,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 				// gld
 				
 				// calculate choice probs and integrate to be sure all options integrate to 1:
+				for(d=0;d<Noccs+1;d++) R_dP_ld[d] = 0.;
 				for(dd=0;dd<Noccs;dd++){ // values in any possible direction
 					double ret_d_dd = gsl_vector_get(ret_d,dd);
 					R_dP_ld[dd+1] =  ret_d_dd > 0 &&  ret_d_dd < 1.e10 ? ret_d_dd : 0.0;
@@ -1052,11 +1054,15 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 				gprob.function = &hetero_ev;
 				gprob.params = R_dP_ld;
 				for(d=0;d<Noccs;d++){ // choice probabilities
-					R_dP_ld[0] = (double)d;
-					double gg,ggerr;
-					gsl_integration_qags (&gprob,-20,20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
-					sexpret_dd += gg;
-					gsl_vector_set(gld,l*Noccs+d+ll*JJ1,gg );
+					if(R_dP_ld[d+1]>0. && gsl_matrix_get(pld,l+ll*(Noccs+1),d) >0. ){
+						R_dP_ld[0] = (double) d;
+						double gg, ggerr;
+						gsl_integration_qags(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
+						sexpret_dd += gg;
+						gsl_vector_set(gld, l * Noccs + d + ll * JJ1, gg);
+					}
+					else
+						gsl_vector_set(gld, l * Noccs + d + ll * JJ1, 0.);
 				}
 				for(d=0;d<Noccs;d++){ 
 					double g_updaterate = 1.0;
@@ -1067,12 +1073,12 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 						+ g_updaterate* gsl_vector_get(gld,l*Noccs+d+ll*JJ1)/sexpret_dd);
 				}
 				// check it was pretty close to 1
-				if(sexpret_dd < 1-1.e-2){
+				if( fabs(sexpret_dd-1.) > 1.e-2){
 					solerr = fopen(soler_f,"a+");
-					fprintf(solerr,"SS choice probabilities not add to 1 at (l,d)=(%d,%d)\n",l,dd);
+					fprintf(solerr,"SS choice probabilities added to %f != 1 at (l,d)=(%d,%d)\n",sexpret_dd,l,dd);
 					fclose(solerr);
 					if(verbose>=2)
-						printf("SS choice probabilities not add to 1 at (l,d)=(%d,%d)\n",l,dd);
+						printf("SS choice probabilities add to %f != 1 at (l,d)=(%d,%d)\n",sexpret_dd,l,dd);
 				}
 				
 				
@@ -1101,9 +1107,13 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 					double sep_ld = scale_s*exp(shape_s*cutoff);
 					gsl_vector_set(sld,l*Noccs+d,sep_ld);
 				}// for d=0:Noccs
-				// g adds to 1
+				// if there're vacancies open, be sure at least someone's going there:
+				for(d=0;d<Noccs;d++){
+					if( gsl_vector_get(thetald,JJ1*ll+l*Noccs+d)>0. && gsl_vector_get(gld,JJ1*ll+l*Noccs+d)<1.e-5 )
+						gsl_vector_set(gld,JJ1*ll+l*Noccs+d,1.e-5) ;
+				}
 
-
+				// g adds to 1 (may not because of the prior step)
 				double gsum = 0.0;
 				for(d =0 ;d<Noccs;d++)	gsum += gld->data[ll*JJ1 + l*Noccs+d];
 				for(d =0 ;d<Noccs;d++)	gld->data[ll*JJ1 + l*Noccs+d] /= gsum;
@@ -2004,7 +2014,7 @@ int sys_co_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix*
 
 							Vp[1] = (double) dd;
 							double dgdret_dd;
-							gsl_integration_qags(&dgprob,-20,20,1e-6,1e-6,1000,dgwksp,&dgdret_dd,&dgdreterr);
+							gsl_integration_qags(&dgprob,1.e-5,20,1e-6,1e-6,1000,dgwksp,&dgdret_dd,&dgdreterr);
 							dgdret[dd] = dgdret_dd;
 							
 							//**********************
@@ -2244,7 +2254,7 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 							Vp[1] = (double) dd;
 							
 							double dgdret_dd, dgdreterr;
-							gsl_integration_qags(&dgprob,-20,20,1e-6,1e-6,1000,dgwksp,&dgdret_dd,&dgdreterr);
+							gsl_integration_qags(&dgprob,1.e-5,20,1e-6,1e-6,1000,dgwksp,&dgdret_dd,&dgdreterr);
 							dgdret[dd] = dgdret_dd;
 
 							double dgdzdd = pldd*(1.-fm_shr)*chi[l][dd]*dgdret_dd;
@@ -3924,11 +3934,16 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 			gprob.function = &hetero_ev;
 			gprob.params = R_dP_ld;
 			for(d=0;d<Noccs;d++){ // choice probabilities
-				R_dP_ld[0] = (double)d;
-				double gg,ggerr;
-				gsl_integration_qags (&gprob,-20,20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
-				sexpret_dd += gg;
-				gsl_matrix_set(gld,l+ll*(Noccs+1),d,gg );
+				if(ret_d[d]>0 && gsl_matrix_get(pld,l+ll*(Noccs+1),dd) > 0.){
+					R_dP_ld[0] = (double)d;
+					double gg,ggerr;
+					gsl_integration_qags (&gprob,1.e-5,20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
+					sexpret_dd += gg;
+					gsl_matrix_set(gld,l+ll*(Noccs+1),d,gg );
+				}
+				else
+					gsl_matrix_set(gld, l + ll * (Noccs + 1), d, 0.);
+
 			}
 
 			// check it was pretty close to 1
@@ -4866,44 +4881,51 @@ double dinvq(const double q){
 
 
 double hetero_ev(double eps, void * Vp_in){
-	int i,j, pj, pi;
+	// this is the probability of going to i, and we have to integrate over the values if go to any other j
+
+	int i,j;
 	// Vp has Noccs*2 + 1 values.  The first value is the index of the probability we're choosing (i) and the rest are the Values and then the scale parameters
-	double intval, val;
+	double intval, Vsum,Vj,Vi, pj, pi;
 	double * Vp = (double*) Vp_in;
-	
-	intval = 0;
+
+	Vsum= 0;intval =0.;
 	i = (int) Vp[0];
-	pi = i+1+Noccs;
-	for(j=0;j<Noccs;j++){
-		pj = j+1+Noccs;
-		intval = Vp[pj] > 0. && Vp[j+1] > 0. && i != j ?
-			exp( -(Vp[i+1] - Vp[j+1] + eps*Vp[pi])/Vp[pj] ) + intval
-			: intval;
-	}
-	//			Lambda					lambda <- Following language of Bhat (1995)
-	intval = exp(-intval)*exp(-eps)*exp(-exp(-eps))*exp(-eps);
+	pi = Vp[i+1+Noccs];
+	Vi = Vp[i + 1];
+	if(pi > 0. && Vi>0.) {
+		for (j = 0; j < Noccs; j++) {
+			pj = Vp[j + 1 + Noccs]>0. ? Vp[j + 1 + Noccs]: 1.e-5;
+			Vj = Vp[j + 1];
+			Vsum = i != j ? exp(-(Vi - Vj - log(eps) * pi) / pj) + Vsum : Vsum;
+		}
+		//			Lambda					lambda <- Following language of Bhat (1995)
+		intval = exp(-Vsum) * exp(-eps);
+	}else
+		intval = 0.;
 	return intval;
 }
 
 
 double dhetero_ev(double eps, void * Vp_in){
-	int i,j,k,pi, pj;
+	int i,j,k;
 	// Vp has Noccs*2 + 2 values.  The first value is the index of the probability we're choosing and the rest are the Values and then the scale parameters
-	double intval;
+	double intval,pi, pj,pk, Vi,Vj,Vk;
 	double * Vp = (double*) Vp_in;
 	
 	intval = 0;
 	i = (int) Vp[0];
 	k = (int) Vp[1];
-	pi = i+2+Noccs;
+	pi = Vp[i+2+Noccs] >0. ? Vp[i+2+Noccs] : 1e-5;
+	Vi = Vp[i+2];
 	for(j=0;j<Noccs;j++){
-		pj = j+2+Noccs;
-		intval = Vp[pj] > 0. && Vp[j+1] > 0. && i != j ?
-			exp( -(Vp[i+2] - Vp[j+2] + eps*Vp[pi])/Vp[pj] ) + intval
-			: intval;
+		pj = Vp[j+2+Noccs] >0 ? Vp[j+2+Noccs] : 1e-5;
+		Vj = Vp[j+2];
+		intval = i != j ? exp( -(Vi - Vj - log(eps)*pi)/pj ) + intval : intval;
 	}
-	intval = exp(-intval)*exp(-eps)*exp(-exp(-eps))*exp(-eps);
-	intval *= -1./Vp[k+2+Noccs]*exp(-(Vp[i+2]-Vp[k+2]-eps*Vp[i+2+Noccs])/Vp[k+2+Noccs] );
+	intval = exp(-intval)*exp(-eps);
+	pk = Vp[k+2+Noccs]>0.?Vp[k+2+Noccs] : 1e-5;
+	Vk = Vp[k+2];
+	intval *= -1./pk*exp(-(Vi-Vk-log(eps)*pi)/pk);
 	return intval;
 }
 
@@ -5461,17 +5483,23 @@ int set_params(const double * x, int cal_set){
 	if(cal_set==0 || cal_set==2){
 		for(l=1;l<Noccs+1;l++){
 			for(d=0;d<Noccs;d++){
-				chi[l][d] = 0.0;
-				for(i=0;i<Nskill-1;i++){
-					chi[l][d] += x[param_offset+i]*(gsl_matrix_get(f_skills,d,i+1) - gsl_matrix_get(f_skills,l-1,i+1));
+				if(l!=d+1) {
+					chi[l][d] = 0.0;
+					for (i = 0; i < Nskill - 1; i++) {
+						chi[l][d] += x[param_offset + i] *
+									 (gsl_matrix_get(f_skills, d, i + 1) - gsl_matrix_get(f_skills, l - 1, i + 1));
+					}
+					chi[l][d] += x[param_offset + Nskill - 1];
+					chi[l][d] = exp(chi[l][d]);
+					//chi[l][d] += x[param_offset+Nskill];
 				}
-				chi[l][d] += x[param_offset+Nskill-1];
-				chi[l][d] 	= exp(chi[l][d]);
-				//chi[l][d] += x[param_offset+Nskill];
+				else{
+					chi[l][d] = 1.;
+				}
 			}
 		}
 		double chi_lb = 0.5;
-		double chi_ub = 0.9;
+		double chi_ub = 1.0;
 		for(l=1;l<Noccs+1;l++){
 			for(d=0;d<Noccs;d++){
 				if(l!=d+1){
@@ -5488,15 +5516,10 @@ int set_params(const double * x, int cal_set){
 			chi[0][d] = mean_chi/((double)Noccs-1.0);
 
 		}
-		//for(d=0;d<Noccs;d++)
-		//	chi[d+1][d] = 1.0;
+		for(d=0;d<Noccs;d++)
+			chi[d+1][d] = 1.0;
 	}
-	//for(l=0;l<Noccs+1;l++){
-	//	chi[l][17]/=2.0;
-	//}
-	chi[18][17]=1.0;
-	// recompute b[0]
-	//b[1]=0.71;
+
 	b[1] = brt;
 	b[0] = 0.0;
 	for(d=0;d<Noccs;d++){
