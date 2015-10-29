@@ -2427,7 +2427,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 	struct aux_coef * simdat = st->sim;
 	int init_T = 200, l,d,ll;
 	int Nl = 2*(Noccs+1);
-	int di,estiter,status =0,maxestiter=15;
+	int di,estiter,status =0,maxestiter=1;
 	double fd_dat[Noccs];
 	double ** pld	= malloc(sizeof(double*)*Nl);
 	for(l = 0;l<Nl;l++)
@@ -2454,9 +2454,9 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 	gsl_matrix * uf_hist= gsl_matrix_calloc(simT,4);
 
 	gsl_matrix_memcpy(x,xss);
-	sol->tld = gsl_matrix_calloc(Noccs+1,Noccs);
-	sol->gld = gsl_matrix_calloc(Noccs+1,Noccs);
-	sol->sld = gsl_matrix_calloc(Noccs+1,Noccs);
+	sol->tld = gsl_matrix_calloc(Nl,Noccs);
+	sol->gld = gsl_matrix_calloc(Nl,Noccs);
+	sol->sld = gsl_matrix_calloc(Nl,Noccs);
 
 	struct shock_mats mats1;
 
@@ -2473,6 +2473,18 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 	mats1.var_zeta	= gsl_matrix_alloc(Noccs,Noccs);
 
 
+	if(printlev >= 3){ // punch out one set of policies
+		gsl_vector_set_zero(Zz);
+		status += theta(sol->tld, ss, sys, sol, Zz);
+		status += gpol(sol->gld, ss, sys, sol, Zz);
+		status += spol(sol->sld, ss, sys, sol, Zz);
+		status += xprime(xp,ss,sys,sol,x,Zz);
+		printmat("tld_z0.csv",sol->tld);
+		printmat("gld_z0.csv",sol->gld);
+		printmat("sld_z0.csv",sol->sld);
+		printmat("xp_z0.csv",xp);
+	}
+
 	int printlev_old 	= printlev;
 	/////////////////////////////////////////////////////////////
 	//printlev = printlev_old>1 ? 1: printlev_old;
@@ -2486,15 +2498,46 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		double s_fnd = 0.;
 		double s_urt = 0.;
 		for(di=0;di<init_T;di++){
+
 			status += theta(sol->tld, ss, sys, sol, Zz);
 			status += gpol(sol->gld, ss, sys, sol, Zz);
 			status += spol(sol->sld, ss, sys, sol, Zz);
 			status += xprime(xp,ss,sys,sol,x,Zz);
 
 			gsl_matrix_memcpy(x,xp);
+/////////////////////////////////////////////////////////////
 			double urtp = 0.0;
+			double srtp = 0.;
 			for(l=0;l<Noccs+1;l++)
 				urtp += gsl_matrix_get(xp,l,0)+gsl_matrix_get(xp,l,Noccs+1);
+			for(l=0;l<Noccs+1;l++){
+				for(ll=0;ll<2;ll++)
+					gsl_vector_set(x_u,l+ll*(Noccs+1),gsl_matrix_get(xp,l,ll*(Noccs+1))/urtp);
+			}
+			for(l=0;l<Noccs+1;l++){
+				for(d=1;d<Noccs+1;d++)
+					srtp += gsl_matrix_get(sol->sld,l,d-1) * gsl_matrix_get(xp,l,d)/(1.-urtp);
+			}
+			// compute finding rates
+			for(l=0;l<Nl;l++){
+				for(d=0;d<Noccs;d++)
+					pld[l][d] = pmatch(gsl_matrix_get(sol->tld,l,d) );
+			}
+			double d_fnd =0.0;
+			for(l=0;l<Nl;l++){
+				fnd_l->data[l] = 0.0;
+				for(d=0;d<Noccs;d++){
+					fnd_l->data[l] += gsl_matrix_get(sol->gld,l,d)*pld[l][d];
+				}
+				d_fnd += fnd_l->data[l]*gsl_vector_get(x_u,l);
+			}
+/////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////
+		//	printf("urtp in warmup: %f\n", urtp);
+		//	printf("sep rate in warmup %f:\n",srtp);
+		//	printf("finding rate in warmup %f:\n",d_fnd);
+/////////////////////////////////////////////////////////////
+
 
 			gsl_vector_view Zdraw = gsl_matrix_row(simdat->draws,di);
 
@@ -2521,6 +2564,10 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 				for(d=0;d<Nfac;d++)
 					gsl_matrix_set(mats0->facs,di,d,gsl_vector_get(Zz,Nagf+d));
 			}
+			/////////////////////////////////////////////////////////////////////
+			/////////////////////////////////////////////////////////////
+			//gsl_vector_set_zero(Zz);
+			////////////////////////////////////////////////////////////////////
 			status += theta(sol->tld, ss, sys, sol, Zz);
 			status += gpol(sol->gld, ss, sys, sol, Zz);
 			status += spol(sol->sld, ss, sys, sol, Zz);
@@ -2537,8 +2584,10 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			double urtp = 0.0;
 			for(l=0;l<Noccs+1;l++)
 				urtp += gsl_matrix_get(xp,l,0)+gsl_matrix_get(xp,l,Noccs+1);
+		//	printf("urtp in regular: %f\n", urtp);
 			s_urt += urtp/((double) simT);
 			gsl_matrix_set(uf_hist,di,1,urtp);
+
 
 			for(l=0;l<Noccs+1;l++){
 				for(ll=0;ll<2;ll++){
@@ -3974,10 +4023,10 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 
 			if(fabs(sexpret_dd -1)>1.e-2){
 				solerr = fopen(soler_f,"a+");
-				fprintf(solerr,"In gpol, SS choice probabilities add to %f != 1 at (l,d)=(%d,%d)\n",sexpret_dd,l,dd);
+				fprintf(solerr,"In gpol, non-SS choice probabilities add to %f != 1 at (l,d)=(%d,%d)\n",sexpret_dd,l,dd);
 				fclose(solerr);
 				if(verbose>=2)
-					printf("In gpol, SS choice probabilities add to %f != 1 at (l,d)=(%d,%d)",sexpret_dd,l,dd);
+					printf("In gpol, non-SS choice probabilities add to %f != 1 at (l,d)=(%d,%d)",sexpret_dd,l,dd);
 			}
 			if (sexpret_dd<1e-2){
 				if(l>0){
@@ -4377,8 +4426,12 @@ int xprime(gsl_matrix * xp, gsl_vector * ss, const struct sys_coef * sys, const 
 	findrt = malloc(sizeof(double)*Nl);
 	for(l=0;l<Nl;l++){
 		findrt[l]=0.0;
-		for(d=0;d<Noccs;d++)
-			findrt[l] += pld[l][d]*gsl_matrix_get(gld,l,d);
+		for(d=0;d<Noccs;d++){
+			double pld_ld =pld[l][d];
+			double gld_ld =gsl_matrix_get(gld,l,d);
+			findrt[l] += pld_ld*gld_ld;
+		}
+
 	}
 
 	//x00
@@ -4522,6 +4575,20 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 	vresidzz= gsl_vector_alloc(T*Noccs);
 	lvresidzz	= gsl_vector_alloc(T*Noccs);
 	coefregs= gsl_vector_alloc(Noccs*(Nfac+1)+1);
+	// de-mean everything
+	double meanZ = 0.;
+	for(t=0;t<T;t++)
+		meanZ += gsl_vector_get(mon_Z,t)/(double)T;
+	gsl_vector_add_constant(mon_Z,-meanZ);
+	for(c=0;c<Noccs;c++){
+		double meanzz = 0.;
+		for(t=0;t<T;t++)
+			meanzz += gsl_matrix_get(occ_prod,t,Noccs);
+		for(t=0;t<T;t++)
+			gsl_matrix_set(occ_prod,t,Noccs,gsl_matrix_get(occ_prod,t,Noccs) - meanzz);
+
+	}
+
 	gsl_matrix_view occ_prod_t = gsl_matrix_submatrix(occ_prod,1,0,T,Noccs);
 	vec(&occ_prod_t.matrix,vzz);
 	gsl_matrix_view occ_prod_tm1 = gsl_matrix_submatrix(occ_prod,0,0,T,Noccs);
