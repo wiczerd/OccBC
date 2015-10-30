@@ -1392,7 +1392,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 				gsl_matrix_set(Pxx1,l*(Noccs+1)+d,l*(Noccs+1)+0,
 						gsl_vector_get(gld,l*Noccs + d-1)*gsl_matrix_get(pld,l,d-1));
 			}else{
-				gsl_matrix_set(Pxx1,l*(Noccs+1)+d,l*(Noccs+1)+d,(1.0-sld->data[l*Noccs+d]));
+				gsl_matrix_set(Pxx1,l*(Noccs+1)+d,l*(Noccs+1)+d,(1.0-sld->data[l*Noccs+d+1]));
 				gsl_matrix_set(Pxx1,l*(Noccs+1)+d,l*(Noccs+1)+0,
 						gsl_vector_get(gld,l*Noccs + d-1)*gsl_matrix_get(pld,l,d-1));
 				for(ll=0;ll<Noccs+1;ll++){
@@ -5105,6 +5105,22 @@ double dhetero_ev(double eps, void * Vp_in){
 	intval *= -1./pk*exp(-(Vi-Vk-log(eps)*pi)/pk);
 	return intval;
 }
+int sol_memcpy(struct sys_sol * cpy, const struct sys_sol * base){
+	int status;
+	status =0;
+	status += gsl_matrix_memcpy(cpy->gld,base->gld);
+	status += gsl_matrix_memcpy(cpy->tld,base->tld);
+	status += gsl_matrix_memcpy(cpy->sld,base->sld);
+	status += gsl_matrix_memcpy(cpy->ss_wld,base->ss_wld);
+
+	status += gsl_matrix_memcpy(cpy->P0,base->P0);
+	status += gsl_matrix_memcpy(cpy->P1,base->P1);
+	status += gsl_matrix_memcpy(cpy->P2,base->P2);
+	status += gsl_matrix_memcpy(cpy->PP,base->PP);
+
+	return status;
+}
+
 
 int VARest(gsl_matrix * X,gsl_matrix * coef, gsl_matrix * varcov){
 	//gsl_matrix * Ydat = gsl_matrix_alloc(Xdat->size1,Xdat->size2);
