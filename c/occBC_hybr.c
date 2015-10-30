@@ -54,7 +54,7 @@ int verbose 	= 3;
 int printlev 	= 3;
 int rescale_var	= 0;
 int check_fin	= 0;
-int homosk_psi	= 0;
+int homosk_psi	= 1;
 int use_anal	= 1; // this governs whether the perturbation uses analytic derivatives
 int fix_fac		= 0; // this allows f_t to be free when estimating.  o.w. the path of f_t, gamma and var_eta are fixed.
 int opt_alg		= 3; // 10x => Nelder-Meade, 5x => Subplex, 3x => DFBOLS, o.w => BOBYQA
@@ -1067,6 +1067,8 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 						R_dP_ld[0] = (double) d;
 						double gg, ggerr;
 						gsl_integration_qags(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
+						size_t neval;
+						//gsl_integration_qng(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, &gg, &ggerr,&neval);
 						sexpret_dd += gg;
 						gsl_vector_set(gld, l * Noccs + d + ll * JJ1, gg);
 					}
@@ -1089,8 +1091,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 					if(verbose>=2)
 						printf("SS choice probabilities add to %f != 1 at (l,d)=(%d,%d)\n",sexpret_dd,l,dd);
 				}
-				
-				
+
 				//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 				// theta
 				for(d=0;d<Noccs;d++){
@@ -3972,7 +3973,6 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 	int ss_gld_i,ss_Wld_i,ss_Wl0_i;
 	double ret_d[Noccs];
 	double *R_dP_ld	= malloc(sizeof(double)*Noccs*2+1);
-	gsl_integration_workspace * integw = gsl_integration_workspace_alloc(1000);
 
 		// indices where these things are
 		ss_Wl0_i	= 0;//ss_x_i + pow(Noccs+1,2);
@@ -4029,18 +4029,23 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 				gsl_function gprob;
 				gprob.function = &hetero_ev;
 				gprob.params = R_dP_ld;
+				//#pragma omp parallel for private(gprob, d) reduction(+:sexpret_dd) default(shared)
 				for(d=0;d<Noccs;d++){ // choice probabilities
+					//gsl_integration_workspace * integw = gsl_integration_workspace_alloc(1000);
 					if(ret_d[d]>0 && gsl_matrix_get(pld,l+ll*(Noccs+1),d) > 0.){
 						R_dP_ld[0] = (double)d;
 						double gg,ggerr;
-						gsl_integration_qags (&gprob,1.e-5,20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
+						size_t neval;
+					//	gsl_integration_qags(&gprob,1.e-5,20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
+						gsl_integration_qng(&gprob,1.e-5,20, 1.e-5, 1.e-5, &gg, &ggerr,&neval);
 						sexpret_dd += gg;
 						gsl_matrix_set(gld,l+ll*(Noccs+1),d,gg );
 					}
 					else
 						gsl_matrix_set(gld, l + ll * (Noccs + 1), d, 0.);
+					//gsl_integration_workspace_free(integw);
 				}
-			} // check homosk_psi
+			} // check homosk_psi (this is much faster)
 			else{
 				double gld_l = 0;
 				for(d=0;d<Noccs;d++)
@@ -4129,7 +4134,7 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 	gsl_matrix_free(pld);
 
 	free(R_dP_ld);
-	gsl_integration_workspace_free(integw);
+
 
 	return status;
 }
