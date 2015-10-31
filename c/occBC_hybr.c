@@ -1047,7 +1047,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 						double pld_ld = gsl_matrix_get(pld,l+ll*(Noccs+1),d);
 						double post = pld_ld > 0 ? -kappa*gsl_vector_get(thetald,ll*JJ1 + l*Noccs+d)/pld_ld : 0.0;
 
-						double arr_d = (1.0-fm_shr)*(chi[l][d]*(1.0+zd) -nud - (1.0-(double)ll)*bl - ((double)ll)*privn + beta*Wdif);
+						double arr_d = (1.0-fm_shr)*(chi[l][d]*exp(zd) -nud - (1.0-(double)ll)*bl - ((double)ll)*privn + beta*Wdif);
 						//		+ (1.0-(double)ll)*bl + ((double)ll)*privn + beta*((1.0-1.0/bdur)*W_l0->data[l+ ll*(Noccs+1)] + 1.0/bdur*W_l0->data[l + Noccs+1]);
 						arr_d = arr_d > W_ld->data[l*Noccs+d] ? W_ld->data[l*Noccs+d]: arr_d;
 						gsl_vector_set(ret_d,d,pld_ld*arr_d);
@@ -1103,7 +1103,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 
 					double nud 	= l-1 !=d ? nu : 0.0;
 					double Wdif	= W_ld->data[l*Noccs+d] - (1.0-1.0/bdur)*W_l0->data[ll*(Noccs+1)+l]- 1.0/bdur*W_l0->data[Noccs+1+l];
-					double surp = chi[l][d]*(1.0+zd) - nud - (1.0-(double)ll)*bl - ((double)ll)*privn +beta*Wdif;
+					double surp = chi[l][d]*exp(zd) - nud - (1.0-(double)ll)*bl - ((double)ll)*privn +beta*Wdif;
 					if(surp > 0.0){
 						double qhere = kappa/(fm_shr*surp);
 						double tldi = invq(qhere);
@@ -1116,7 +1116,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 						gsl_vector_set(thetald,JJ1*ll+l*Noccs+d,0.0);
 
 					// sld
-					double cutoff = -(chi[l][d]*(1.0+zd) + beta*W_ld->data[l*Noccs+d] - W_l0->data[l]);
+					double cutoff = -(chi[l][d]*exp(zd) + beta*W_ld->data[l*Noccs+d] - W_l0->data[l]);
 					cutoff = cutoff >0.0 ? 0.0 : cutoff;
 					double sep_ld = scale_s*exp(shape_s*cutoff);
 					gsl_vector_set(sld,l*Noccs+d,sep_ld);
@@ -1150,7 +1150,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 					double zd = Zz->data[d+Notz];
 					if(l-1!=d){
 						gsl_vector_set(W_ld,l*Noccs+d,
-							((1.0-tau)*((1.0-sepld )*(chi[l][d]*(1.0+zd)+ beta*W_ld->data[l*Noccs+d])
+							((1.0-tau)*((1.0-sepld )*(chi[l][d]*exp(zd)+ beta*W_ld->data[l*Noccs+d])
 									+ sepld*W_l0->data[0] ) + tau*W_ld->data[(d+1)*Noccs+d]  ) );
 							double bhere = l>0 ? b[1]:b[0];
 							bhere = ll>0? privn:bhere;
@@ -1185,7 +1185,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 					double zd = Zz->data[d+Notz];
 					double nud = l==d+1? 0.0:nu;
 					double post = gsl_matrix_get(pld,l,d)>0? - kappa*thetald->data[l*Noccs+d]/gsl_matrix_get(pld,l+ll*(Noccs+1),d) : 0.0;
-					double ret 	= chi[l][d]*(1.0+zd) - nud
+					double ret 	= chi[l][d]*exp(zd) - nud
 							+ beta*gsl_vector_get(W_ld,l*Noccs+d)
 							- bl*(1.0-(double)ll) - (double)ll*privn - beta*((1.0-1.0/bdur)*W_l0->data[l + ll*(Noccs+1)] + 1.0/bdur*W_l0->data[l+Noccs+1]);
 					ret 	*= (1.0-fm_shr);
@@ -3229,11 +3229,15 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 					double barxi = -log(gsl_matrix_get(sol->sld,l,d)/shape_s )/shape_s;
 					double Exi = scale_s*((1.0/shape_s+barxi)*exp(-shape_s*barxi)-1.0/shape_s);
 					double W0_ld = l>=Noccs+1 ? Es->data[Wl0_i+l] : (1.0-1.0/bdur)*Es->data[Wl0_i+l]-1.0/bdur *Es->data[Wl0_i+l+Noccs+1] ;
+					///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+					///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 					double bEJ = beta*fm_shr*(Es->data[Wld_i + l*Noccs+d] -beta*W0_ld);
+					///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 
 			//		double wld_ld = (1.0-fm_shr)*chi[l][d]*exp(Zz->data[0]+Zz->data[Notz+d]) +
 			//				bEJ - fm_shr*beta*(Es->data[Wld_i + l*Noccs+d] -Es->data[Wl0_i+l]) - fm_shr*(bl+Exi);
-					double wld_ld = (1.0-fm_shr)*chi[l%(Noccs+1)][d]*(1.0+Zz->data[Notz+d]) +
+					double wld_ld = (1.0-fm_shr)*chi[l*(Noccs+1)][d]*exp(Zz->data[Notz+d]) +
 							bEJ - fm_shr*beta*(Es->data[Wld_i + l*Noccs+d] -W0_ld) - fm_shr*(bl+Exi);
 
 					wld_ld = wld_ld >0.0 ? wld_ld : 0.0;
@@ -4028,7 +4032,7 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 
 				double cont	= Es->data[Wld_i + l*Noccs+d] - (1.-1./bdur)*Es->data[Wl0_i + l+ll*(Noccs+1)] - 1./bdur*Es->data[Wl0_i + l+Noccs+1];
 
-				ret_d[d]	= (1.-fm_shr)*(chi[l][d]*(1. + zd) - bl*(1.-(double)ll) - privn*(double)ll - nud + beta*cont);
+				ret_d[d]	= (1.-fm_shr)*(chi[l][d]*exp(zd) - bl*(1.-(double)ll) - privn*(double)ll - nud + beta*cont);
 				//	+ bl*(1.-(double)ll) + privn*(double)ll
 				//	+ (1.-1./bdur)*Es->data[Wl0_i + l+ll*(Noccs+1)] + 1./bdur*Es->data[Wl0_i + l+Noccs+1];
 				ret_d[d]	*= gsl_matrix_get(pld,l+ll*(Noccs+1),d);
@@ -4206,7 +4210,7 @@ int spol(gsl_matrix * sld, const gsl_vector * ss, const struct sys_coef * sys, c
 			double zd = Zz->data[d+Notz];
 			double nud = l == d+1? 0:nu;
 
-			double ret	= chi[d][d]*(1.0+zd) - nud
+			double ret	= chi[d][d]*exp(zd) - nud
 							+ beta*Es->data[Wld_i + l*Noccs+d]
 							- bl - beta*Es->data[Wl0_i + l];
 			ret *= (1.0- fm_shr);
@@ -4219,7 +4223,7 @@ int spol(gsl_matrix * sld, const gsl_vector * ss, const struct sys_coef * sys, c
 
 			double Wdiff	= beta*Es->data[Wld_i+l*Noccs+d] - W0;
 
-			double cutoff= - (chi[l][d]*(1.0+zd)+ Wdiff);
+			double cutoff= - (chi[l][d]*exp(zd)+ Wdiff);
 			cutoff = cutoff >0.0 ? 0.0 : cutoff;
 			double sep_ld = scale_s*exp(shape_s*cutoff);
 			if(cutoff<0.0)
@@ -4265,7 +4269,7 @@ int theta(gsl_matrix * tld, const gsl_vector * ss, const struct sys_coef * sys, 
 				double cont	= (Es->data[Wld_i+l*Noccs+d] -
 						(1.0-1.0/bdur)*Es->data[Wl0_i+l + ll*(Noccs+1)] - 1.0/bdur*Es->data[Wl0_i+l + Noccs+1] );
 
-				double surp =chi[l][d]*(1.0+zd) - bl*(1.-(double)ll) - (double)ll*privn - nud + beta*cont;
+				double surp =chi[l][d]*exp(zd) - bl*(1.-(double)ll) - (double)ll*privn - nud + beta*cont;
 
 				double qhere = kappa/(fm_shr*surp);
 				double tld_i = invq(qhere);
@@ -4314,7 +4318,7 @@ double zsol_resid(double zdhere, void *params){
 
 	for(l=0;l<Noccs+1;l++){
 		for(ll=0;ll<2;ll++){
-			double surp = (1. + zdhere) * chi[l][d] + fd_xg_surp[1+Nl+ll*(Noccs+1)+l];
+			double surp = exp(zdhere) * chi[l][d] + fd_xg_surp[1+Nl+ll*(Noccs+1)+l];
 			if(surp>0){
 				goodl++;
 				avgp += fd_xg_surp[1+ll*(Noccs+1)+l]*pmatch(invq(kappa/(fm_shr*surp)));
@@ -4325,7 +4329,7 @@ double zsol_resid(double zdhere, void *params){
 	if(goodl >0){
 		resid = fd_here - avgp/avga;
 	} else
-		resid = -1.;
+		resid = fd_here; // put in a penalty for how negative was the surplus
 
 	return resid;
 }
@@ -4409,7 +4413,7 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 		zp.d = d;
 		F.params = &zp;
 		double zdhere =0;
-		double zdmin = -2;
+		double zdmin = -4;
 		double zdmax = 2;
 		gsl_root_fsolver_set(zsolver,&F,zdmin,zdmax);
 		int zditer = 0;
