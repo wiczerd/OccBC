@@ -62,7 +62,7 @@ int opt_alg		= 3; // 10x => Nelder-Meade, 5x => Subplex, 3x => DFBOLS, o.w => BO
 int polish_alg	= 0;
 double ss_tol	= 1e-7; // tighten this with iterations?
 double dyn_tol	= 1e-7; // ditto?
-double zmt_upd	= 0.1;
+double zmt_upd	= 1.;
 int homosk_zeta	= 0;
 int diag_zeta	= 1;
 int gsl_fin_diffs=0;
@@ -1636,8 +1636,8 @@ int sys_ex_set(gsl_matrix * N, gsl_matrix * S,struct shock_mats * mats){
 	gsl_matrix_set_identity(N0);
 
 	//partitions of Lambda:
-	gsl_matrix_view Lambdarf = gsl_matrix_submatrix(mats->Lambda,0,0,Noccs,Nfac*(Nllag+1));
-	gsl_vector_view LambdarZ = gsl_matrix_column(mats->Lambda,Nfac*(Nllag+1));
+	gsl_matrix_view Lambdarf = gsl_matrix_submatrix(mats->Lambda,0,0,Noccs,Nfac*(Nllag+1)); // the unobserved factors come first
+	gsl_vector_view LambdarZ = gsl_matrix_column(mats->Lambda,Nfac*(Nllag+1)); // the aggregate comes second
 
 
 //	for(l=0;l<Noccs;l++)
@@ -2494,6 +2494,16 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 	}
 	printmat("Zz_hist0.csv",Zz_hist);
 
+	// compute the standard deviation of finding for each occupation
+	double fd_sim_sd[Noccs];
+	double fd_dat_sd[Noccs];
+	double fd_datsim_sd[Noccs];
+	for(d=0;d<Noccs;d++){
+		double fdhere_hist[simT];
+		for(di=0;di<simT;di++) fdhere_hist[di] = gsl_matrix_get(simdat->fd_hist_dat,di,d);
+		fd_dat_sd[d] = gsl_stats_sd(fdhere_hist,1,simT);
+	}
+
 	if(printlev >= 3){ // punch out one set of policies
 		gsl_vector_set_zero(Zz);
 		status += theta(sol->tld, ss, sys, sol, Zz);
@@ -2526,33 +2536,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			status += xprime(xp,ss,sys,sol,x,Zz);
 
 			gsl_matrix_memcpy(x,xp);
-/*///////////////////////////////////////////////////////////
-			double urtp = 0.0;
-			double srtp = 0.;
-			for(l=0;l<Noccs+1;l++)
-				urtp += gsl_matrix_get(xp,l,0)+gsl_matrix_get(xp,l,Noccs+1);
-			for(l=0;l<Noccs+1;l++){
-				for(ll=0;ll<2;ll++)
-					gsl_vector_set(x_u,l+ll*(Noccs+1),gsl_matrix_get(xp,l,ll*(Noccs+1))/urtp);
-			}
-			for(l=0;l<Noccs+1;l++){
-				for(d=1;d<Noccs+1;d++)
-					srtp += gsl_matrix_get(sol->sld,l,d-1) * gsl_matrix_get(xp,l,d)/(1.-urtp);
-			}
-			// compute finding rates
-			for(l=0;l<Nl;l++){
-				for(d=0;d<Noccs;d++)
-					pld[l][d] = pmatch(gsl_matrix_get(sol->tld,l,d) );
-			}
-			double d_fnd =0.0;
-			for(l=0;l<Nl;l++){
-				fnd_l->data[l] = 0.0;
-				for(d=0;d<Noccs;d++){
-					fnd_l->data[l] += gsl_matrix_get(sol->gld,l,d)*pld[l][d];
-				}
-				d_fnd += fnd_l->data[l]*gsl_vector_get(x_u,l);
-			}
-*/
+
 			gsl_vector_view Zdraw = gsl_matrix_row(simdat->draws,di);
 
 			gsl_blas_dgemv (CblasNoTrans, 1.0, sys->S, &Zdraw.vector, 0.0,shocks);
@@ -2566,6 +2550,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			gsl_vector_view Zz_hist_di = gsl_matrix_row(Zz_hist,di);
 			gsl_vector_memcpy(Zz,&Zz_hist_di.vector);
 
+			gsl_vector_set_zero(Zz);
 			status += theta(sol->tld, ss, sys, sol, Zz);
 			status += gpol(sol->gld, ss, sys, sol, Zz);
 			status += spol(sol->sld, ss, sys, sol, Zz);
@@ -2640,13 +2625,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			}
 			gsl_vector_view Zz_hist_di = gsl_matrix_row(Zz_hist,di);
 			gsl_vector_memcpy(Zz,&Zz_hist_di.vector);
-			// adjust theta so it's consistent with fd_dat finding rate
-			double fd_sim[Noccs];
-			for(d=0;d<Noccs;d++){
-				fd_sim[d] = gsl_matrix_get(fnd_d_hist,di,d);
-				for(l=0;l<Nl;l++) gsl_matrix_set( sol_hist[di].tld,l,d, gsl_matrix_get(sol_hist[di].tld,l,d)*
-												  invp(fd_dat[d])/invp(fd_sim[d]) );
-			}
+
 			// compute finding rates
 			for(l=0;l<Nl;l++){
 				for(d=0;d<Noccs;d++)
@@ -2666,6 +2645,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 			sol_free(&sol_hist[di]);
 		}
+
 		// copy the history of implied shocks in to the feed-in shocks (with a weighting)
 		for(di=0;di<simT;di++){
 			gsl_matrix_set(Zz_hist,di,0,zmt_upd*gsl_vector_get(Zhist,di)
@@ -2675,9 +2655,22 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 												 +(1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,d+Notz));
 		}
 
+		// a few summary stats just to see:
+
+		for(d=0;d<Noccs;d++){
+			double fdhere_hist[simT];
+			for(di=0;di<simT;di++) fdhere_hist[di] = gsl_matrix_get(fnd_d_hist,di,d);
+			fd_sim_sd[d] = gsl_stats_sd(fdhere_hist,1,simT);
+			// difference in standard deviation:
+			fd_datsim_sd[d] = fd_sim_sd[d]/fd_dat_sd[d];
+		}
+
+
+
 		// now have to estimate the process given zhist (idiosync prod) and Zhist (ag prod)
 		// Estimate on new data and update!!
 		status += est_fac_pro(zhist,Zhist,&mats1);
+		// this destroys zhist and Zhist in the process
 
 		// update process matrices
 		mats0->rhozz	   = zmt_upd*mats1.rhozz    + (1.-zmt_upd)*mats0->rhozz;
@@ -2705,12 +2698,12 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 		// resolve decision rules around the process
 		// essentially this is updating the matrices
-		//status += sys_ex_set(sys->N,sys->S,mats0);
-		//status += sol_dyn(ss,sol, sys,1);
+	//	status += sys_ex_set(sys->N,sys->S,mats0);
+	//	status += sol_dyn(ss,sol, sys,1);
 
 		double zdist_i = 0.0;
 		gsl_matrix_sub(zhist0,zhist);
-		if(printlev>=4 || status >0){
+		//if(printlev>=4 || status >0){
 			printf("rhozz, rhoZ,s_urt = %f,%f,%f",mats0->rhozz,mats0->rhoZ,s_urt);
 			printmat("zhist_in.csv",zhist);
 			printmat("xhist.csv",xhist);
@@ -2722,7 +2715,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			}
 			printmat("LambdaSol.csv",mats1.Lambda);
 			printmat("var_zetaSol.csv",mats1.var_zeta);
-		}
+		//}
 		int NTz = zhist0->size1*zhist0->size2;
 		for(d=0;d<NTz;d++)
 			zdist_i += pow(zhist0->data[d],2)/(double)NTz;
@@ -4686,17 +4679,19 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 	gsl_vector_add_constant(mon_Z,-meanZ);
 	for(c=0;c<Noccs;c++){
 		double meanzz = 0.;
-		for(t=0;t<T;t++)
-			meanzz += gsl_matrix_get(occ_prod,t,Noccs);
-		for(t=0;t<T;t++)
+		for(t=1;t<T+1;t++)
+			meanzz += gsl_matrix_get(occ_prod,t,Noccs)/(double)T;
+		for(t=1;t<T+1;t++)
 			gsl_matrix_set(occ_prod,t,Noccs,gsl_matrix_get(occ_prod,t,Noccs) - meanzz);
 	}
 
+	// stack everything
 	gsl_matrix_view occ_prod_t = gsl_matrix_submatrix(occ_prod,1,0,T,Noccs);
 	vec(&occ_prod_t.matrix,vzz);
 	gsl_matrix_view occ_prod_tm1 = gsl_matrix_submatrix(occ_prod,0,0,T,Noccs);
 	vec(&occ_prod_tm1.matrix,vzztm1);
-	double rhozz	= gsl_stats_correlation (vzz->data, vzz->stride, vzztm1->data, vzztm1->stride, vzztm1->size);
+	// correlation
+	double rhozz = gsl_stats_correlation (vzz->data, vzz->stride, vzztm1->data, vzztm1->stride, vzztm1->size)/(double)Noccs;
 	for(t=0;t<T;t++){
 		for(c=0;c<Noccs;c++){
 			gsl_matrix_set(residzz,t,c,gsl_vector_get(vzz,c*T+t) - rhozz*gsl_vector_get(vzztm1,c*T+t) );
@@ -4706,10 +4701,8 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 	//status += pca(residzz, Nfac, 0, loadings, facs);
 
 	double rhoZ 	= gsl_stats_lag1_autocorrelation(mon_Z->data,mon_Z->stride,mon_Z->size);
-	double sig_eps2 = 0.0;
-	for(t=1;t<T+1;t++)
-		sig_eps2 += pow(gsl_vector_get(mon_Z,t)-rhoZ*gsl_vector_get(mon_Z,t-1),2)
-						/((double)T);
+	double sig_eps2_unc = gsl_stats_variance(mon_Z->data,mon_Z->stride,mon_Z->size);
+	double sig_eps2 = sig_eps2_unc*(1.-rhoZ*rhoZ);
 	status += gsl_matrix_set_col(xreg, Noccs*(Nfac+1), vzztm1);
 
 	double fd_fac_mean[Nfac],fd_fac_scale[Nfac];
@@ -4723,9 +4716,8 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 				fd_fac_scale[fi] += pow(gsl_matrix_get(fd_mats->facs,c,fi)-fd_fac_mean[fi],2)/(double)simT;
 			fd_fac_scale[fi] = sqrt(fd_fac_scale[fi]);
 		}
-
 	}
-	if(fix_fac==1)
+	//if(fix_fac==1)
 		maxiter=1;
 	for(iter=0;iter<maxiter;iter++){
 		if(fix_fac!=1){
