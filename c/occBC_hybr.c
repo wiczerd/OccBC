@@ -1054,7 +1054,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 				}
 				//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 				// gld
-				
+
 				// calculate choice probs and integrate to be sure all options integrate to 1:
 				for(d=0;d<Noccs+1;d++) R_dP_ld[d] = 0.;
 				for(dd=0;dd<Noccs;dd++){ // values in any possible direction
@@ -1062,23 +1062,28 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 					R_dP_ld[dd+1] =  ret_d_dd > 0 &&  ret_d_dd < 1.e10 ? ret_d_dd : 0.0;
 					R_dP_ld[dd+1+Noccs] = sig_psi*gsl_matrix_get(pld,l+ll*(Noccs+1),dd);
 				}
-				double sexpret_dd =0.0;
+
+				double sexpret_dd = 0.0;
 				gsl_function gprob;
 				gprob.function = &hetero_ev;
 				gprob.params = R_dP_ld;
-				for(d=0;d<Noccs;d++){ // choice probabilities
-					if(R_dP_ld[d+1]>0. && gsl_matrix_get(pld,l+ll*(Noccs+1),d) >0. ){
+				for (d = 0; d < Noccs; d++) { // choice probabilities
+					if (R_dP_ld[d + 1] > 0. && gsl_matrix_get(pld, l + ll * (Noccs + 1), d) > 0.) {
 						R_dP_ld[0] = (double) d;
 						double gg, ggerr;
-						gsl_integration_qags(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
-						size_t neval;
-						//gsl_integration_qng(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, &gg, &ggerr,&neval);
+						#pragma omp critical
+						{
+							gsl_integration_qags(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
+							//size_t neval;
+							//gsl_integration_qng(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, &gg, &ggerr,&neval);
+						}
 						sexpret_dd += gg;
 						gsl_vector_set(gld, l * Noccs + d + ll * JJ1, gg);
 					}
 					else
 						gsl_vector_set(gld, l * Noccs + d + ll * JJ1, 0.);
 				}
+
 				for(d=0;d<Noccs;d++){ 
 					double g_updaterate = 1.0;
 					// convex combination between gld and lgld
@@ -2436,7 +2441,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 	struct aux_coef * simdat = st->sim;
 	int init_T = 200, l,d,ll;
 	int Nl = 2*(Noccs+1);
-	int di,estiter,status =0,maxestiter=100;
+	int di,estiter,status =0,maxestiter=2;
 	double fd_dat[Noccs];
 	double ** pld	= malloc(sizeof(double*)*Nl);
 	for(l = 0;l<Nl;l++)
@@ -2555,7 +2560,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 			gsl_vector_view Zz_hist_di = gsl_matrix_row(Zz_hist,di);
 			gsl_vector_memcpy(Zz,&Zz_hist_di.vector);
-
+		//	gsl_vector_set(Zz,1,1);
 			//gsl_vector_set_zero(Zz);
 			status += theta(sol->tld, ss, sys, sol, Zz);
 			status += gpol(sol->gld, ss, sys, sol, Zz);
@@ -2573,8 +2578,6 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 					gsl_matrix_set(xhist,di,l*(Noccs+2)+d,gsl_matrix_get(x,l,d));
 					gsl_matrix_set(xd_hist,di,d, gsl_matrix_get(x,l,d) + gsl_matrix_get(xd_hist,di,d));
 				}
-
-
 			}
 
 			// calculate the unemployment rate:
@@ -4425,8 +4428,6 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 							   1.0 / bdur * Es->data[Wl0_i + l + Noccs + 1]);
 
 				double surp_minprod = -bl * (1. - (double) ll) - (double) ll * privn - nud + beta * cont;
-				//double zdhere = 1. - (kappa / (qhere * fm_shr) - surp_minprod) / chi[l][d];
-				//double surp = (1. + zdhere) * chi[l][d] + surp_minprod;
 				fd_xg_surp[1+Nl+ll*(Noccs+1)+l] = surp_minprod;
 			}// end for ll=0:1
 		}
@@ -4436,8 +4437,8 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 		zp.d = d;
 		F.params = &zp;
 		double zdhere =0;
-		double zdmin = -4;
-		double zdmax = 2;
+		double zdmin = -2;
+		double zdmax = 1;
 		gsl_root_fsolver_set(zsolver,&F,zdmin,zdmax);
 		int zditer = 0;
 		int zdstatus;
@@ -4519,7 +4520,6 @@ int xprime(gsl_matrix * xp, gsl_vector * ss, const struct sys_coef * sys, const 
 	}
 
 
-
 	double newdisp = 0.0;
 	for(k=0;k<Noccs+1;k++){
 		for(j=1;j<Noccs+1;j++){
@@ -4559,7 +4559,17 @@ int xprime(gsl_matrix * xp, gsl_vector * ss, const struct sys_coef * sys, const 
 			double gld_ld =gsl_matrix_get(gld,l,d);
 			findrt[l] += pld_ld*gld_ld;
 		}
+	}
 
+	if(gsl_vector_get(Zz,1)==1){
+		printmat("gld.csv",gld);
+		gsl_matrix * aldmat = gsl_matrix_calloc(Noccs+1,Noccs);
+		for(l=0;l<Nl;l++){
+			for(d=0;d<Noccs;d++)
+				gsl_matrix_set(aldmat,l,d,ald[l][d]);
+		}
+		printmat("ald.csv",aldmat);
+		gsl_matrix_free(aldmat);
 	}
 
 	//x00
@@ -4693,7 +4703,7 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 	gsl_matrix *residzz, * facs, *loadings,*xreg;
 	int t,c,fi,d,status = 0;
 	int T = mon_Z->size-1;
-	int iter,maxiter=100;
+	int iter,maxiter=2;
 	facs 	= gsl_matrix_alloc(T,Nfac);
 	loadings = gsl_matrix_alloc(Noccs,Nfac);
 	xreg	= gsl_matrix_calloc(T*Noccs,Noccs*(Nfac+1) +1);
