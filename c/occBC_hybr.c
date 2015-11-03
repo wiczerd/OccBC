@@ -46,7 +46,7 @@
 
 
 
-int Nthread 	= 12;
+
 int Nsolerr		= 0;
 int Nobs,simT, nsim, Nskill;
 int nshock;
@@ -286,7 +286,7 @@ int main(int argc,char *argv[]){
 		polish_alg = atoi(argv[3]);
 	status = 0;
 
-	omp_set_num_threads(Nthread);
+
 	//initialize parameters
 	Nskill = 4;
 #ifdef _MKL_USE
@@ -4074,7 +4074,7 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 				Es->data[Wl0_i + l] : Es->data[Wld_i + l*Noccs+d];
 	}
 	*/
-	double avgcont = 0.;
+	/*double avgcont = 0.;
 	double Es_d[Noccs];
 	for(d=0;d<Noccs;d++){
 		Es_d[d]=0;
@@ -4085,7 +4085,7 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 		}
 		Es_d[d] /= (double)((Noccs+1)*2);
 		avgcont += Es_d[d]/(double)Noccs;
-	}
+	}*/
 
 	if(sol->tld==0)
 		status += theta(pld,ss,sys,sol,Zz);
@@ -4107,7 +4107,7 @@ int gpol(gsl_matrix * gld, const gsl_vector * ss, const struct sys_coef * sys, c
 
 				double cont	= Es->data[Wld_i + l*Noccs+d] - (1.-1./bdur)*Es->data[Wl0_i + l+ll*(Noccs+1)] - 1./bdur*Es->data[Wl0_i + l+Noccs+1];
 
-				ret_d[d]	= (1.-fm_shr)*(chi[l][d]*exp(zd) - bl*(1.-(double)ll) - privn*(double)ll - nud + beta*avgcont);
+				ret_d[d]	= (1.-fm_shr)*(chi[l][d]*exp(zd) - bl*(1.-(double)ll) - privn*(double)ll - nud + beta*cont);
 				//	+ bl*(1.-(double)ll) + privn*(double)ll
 				//	+ (1.-1./bdur)*Es->data[Wl0_i + l+ll*(Noccs+1)] + 1./bdur*Es->data[Wl0_i + l+Noccs+1];
 				ret_d[d]	= ret_d[d] < 0 ? 0. : ret_d[d];
@@ -4335,10 +4335,10 @@ int theta(gsl_matrix * tld, const gsl_vector * ss, const struct sys_coef * sys, 
 
 	gsl_vector * Es = gsl_vector_calloc(Ns);
 	gsl_vector_const_view ss_W = gsl_vector_const_subvector(ss,ss_Wl0_i,ss_gld_i-ss_Wl0_i);
-	printvec("ss_W.csv",&ss_W.vector);
+	//printvec("ss_W.csv",&ss_W.vector);
 	status += Es_cal(Es, &ss_W.vector, sol->PP, Zz);
 
-	double avgcont = 0.;
+	/*double avgcont = 0.;
 	double Es_d[Noccs];
 	for(d=0;d<Noccs;d++){
 		Es_d[d]=0;
@@ -4352,6 +4352,7 @@ int theta(gsl_matrix * tld, const gsl_vector * ss, const struct sys_coef * sys, 
 		printf("Es_d = %f,",Es_d[d]);
 		printf("\n");
 	}
+	 */
 
 	for(l=0;l<Noccs+1;l++){
 		double bl = l>0 ? b[1]:b[0];		
@@ -4363,7 +4364,7 @@ int theta(gsl_matrix * tld, const gsl_vector * ss, const struct sys_coef * sys, 
 				double cont	= (Es->data[Wld_i+l*Noccs+d] -
 						(1.0-1.0/bdur)*Es->data[Wl0_i+l + ll*(Noccs+1)] - 1.0/bdur*Es->data[Wl0_i+l + Noccs+1] );
 
-				double surp =chi[l][d]*exp(zd) - bl*(1.-(double)ll) - (double)ll*privn - nud + beta*avgcont ;
+				double surp =chi[l][d]*exp(zd) - bl*(1.-(double)ll) - (double)ll*privn - nud + beta*cont ;
 
 				double qhere = kappa/(fm_shr*surp);
 				double tldhere = invq(qhere);
