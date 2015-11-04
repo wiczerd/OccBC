@@ -1937,12 +1937,12 @@ int sys_co_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix*
 				gsl_vector_set(pld_d,d,pld);
 				gdenom += exp(sig_psi*pXret_d->data[d]);
 			}
+
 			// set up Vp for integral to find derivatives of g
 			for(d=0;d<Noccs;d++){
 				Vp[d+2] = gsl_vector_get(pXret_d,d);
 				Vp[d+2+Noccs] = sig_psi*gsl_vector_get(pld_d,d);
 			}
-				
 
 			for(d=0;d<Noccs;d++){
 				zd = xx->data[d+Notz];
@@ -2281,7 +2281,7 @@ int sys_ex_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco){
 							}
 						}
 						double dgdzd = 0.;
-						for(d=0;d<Noccs;d++) dgdzd += -dgdret[d];
+						for(dd=0;dd<Noccs;dd++) dgdzd += -dgdret[dd];
 						dgdzd *= pld[d]*(1.-fm_shr)*chi[l][d];
 						gsl_matrix_set(Dco,gld_i+l*Noccs+d+ ll*JJ1,d+Notz,dgdzd
 																		  /ss->data[ss_gld_i+l*Noccs+d+ ll*JJ1]
@@ -2544,6 +2544,8 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 
 	for(estiter=0;estiter<maxestiter;estiter++){
+		status =0;
+
 		gsl_vector_view Zdraw = gsl_matrix_row(simdat->draws,0);
 		gsl_blas_dgemv (CblasNoTrans, 1.0, sys->S, &Zdraw.vector, 0.0, Zz);
 		double s_fnd = 0.;
@@ -2652,7 +2654,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			gsl_matrix_memcpy(x,xp);
 
 		}// end di = 1:simT
-
+		int zz_edges = 0;
 		for(di=0;di<simT;di++){
 			for(d=0;d<Noccs;d++) fd_dat[d] = gsl_matrix_get(simdat->fd_hist_dat,di,d) + s_fnd;
 			//setup x:
@@ -2669,7 +2671,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 					pld[l][d] = pmatch(gsl_matrix_get(sol_hist[di].tld,l,d) );
 			}
 			gsl_vector_set_zero(zz_invtheta);
-			status += invtheta_z(zz_invtheta,pld,fd_dat,x,ss,sys,&sol_hist[di],Zz);
+			zz_edges += invtheta_z(zz_invtheta,pld,fd_dat,x,ss,sys,&sol_hist[di],Zz);
 
 			//store Z average
 			double Z_fd = 0.;
@@ -2681,6 +2683,9 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 				gsl_vector_get(zz_invtheta,d));
 
 			sol_free(&sol_hist[di]);
+		}
+		if(zz_edges/simT > Noccs/2){ // more than half the time we're at the edge
+			if(verbose>=3) printf("hit the edge %d times\n",zz_edges);
 		}
 
 		// copy the history of implied shocks in to the feed-in shocks (with a weighting)
@@ -2721,33 +2726,27 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		// this destroys zhist and Zhist in the process
 
 		// update process matrices
-		mats0->rhozz	   = zmt_upd*mats1.rhozz    + (1.-zmt_upd)*mats0->rhozz;
-		mats0->rhoZ	   = zmt_upd*mats1.rhoZ     + (1.-zmt_upd)*mats0->rhoZ;
-		mats0->sig_eps2 = zmt_upd*mats1.sig_eps2 + (1.-zmt_upd)*mats0->sig_eps2;
-		for(d=0;d<Noccs;d++) {
-			for (l = 0; l < Nfac + 1; l++){
-				gsl_matrix_set(mats0->Lambda, d, l,
-							   zmt_upd * gsl_matrix_get(mats1.Lambda, d, l) +
-							   (1. - zmt_upd) * gsl_matrix_get(mats0->Lambda, d, l));
+		if(status == 0){
+			mats0->rhozz   = mats1.rhozz;
+			mats0->rhoZ	   = mats1.rhoZ;
+			mats0->sig_eps2 = mats1.sig_eps2;
+			for(d=0;d<Noccs;d++) {
+				for (l = 0; l < Nfac + 1; l++){
+					gsl_matrix_set(mats0->Lambda, d, l,gsl_matrix_get(mats1.Lambda, d, l));
+				}
 			}
-		}
-		for(d=0;d<Nfac;d++){
-			for(l=0;l<Nfac+1;l++) {
-				gsl_matrix_set(mats0->Gamma, d, l,
-							   zmt_upd * gsl_matrix_get(mats1.Gamma, d, l) +
-							   (1. - zmt_upd) * gsl_matrix_get(mats0->Gamma, d, l));
-				gsl_matrix_set(mats0->var_eta, d, l,
-							   zmt_upd * gsl_matrix_get(mats1.var_eta, d, l) +
-							   (1. - zmt_upd) * gsl_matrix_get(mats0->var_eta, d, l));
+			for(d=0;d<Nfac;d++){
+				for(l=0;l<Nfac+1;l++) {
+					gsl_matrix_set(mats0->Gamma, d, l,gsl_matrix_get(mats1.Gamma, d, l));
+					gsl_matrix_set(mats0->var_eta, d, l,gsl_matrix_get(mats1.var_eta, d, l));
 
+				}
 			}
+			// resolve decision rules around the process
+			// essentially this is updating the matrices
+			// status += sys_ex_set(sys->N,sys->S,mats0);
+			// status += sol_dyn(ss,sol, sys,1);
 		}
-
-
-		// resolve decision rules around the process
-		// essentially this is updating the matrices
-	//	status += sys_ex_set(sys->N,sys->S,mats0);
-	//	status += sol_dyn(ss,sol, sys,1);
 
 		double zdist_i = 0.0;
 		gsl_matrix_sub(zhist0,zhist);
@@ -4474,19 +4473,19 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 		gld = sol->gld;
 	ald = sol->ald;
 
-	double avgcong= 0.;
+	/*double avgcont= 0.;
 	for(d=0;d<Noccs;d++){
 		for(l=0;l<Noccs+1;l++){
 			for(ll=0;ll<2;ll++){
 				double cont = (Es->data[Wld_i + l * Noccs + d] -
 							   (1.0 - 1.0 / bdur) * Es->data[Wl0_i + l + ll * (Noccs + 1)] -
 							   1.0 / bdur * Es->data[Wl0_i + l + Noccs + 1]);
-				avgcong += cont/(double)(Noccs*Nl);
+				avgcont += cont/(double)(Noccs*Nl);
 			}
 
 		}
 
-	}
+	}*/
 
 
 	for(d=0;d<Noccs;d++){
@@ -4511,7 +4510,7 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 							   (1.0 - 1.0 / bdur) * Es->data[Wl0_i + l + ll * (Noccs + 1)] -
 							   1.0 / bdur * Es->data[Wl0_i + l + Noccs + 1]);
 
-				double surp_minprod = -bl * (1. - (double) ll) - (double) ll * privn - nud + beta * avgcong;
+				double surp_minprod = -bl * (1. - (double) ll) - (double) ll * privn - nud + beta * cont;
 				fd_xg_surp[1+Nl+ll*(Noccs+1)+l] = surp_minprod;
 			}// end for ll=0:1
 		}
@@ -4521,8 +4520,8 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 		zp.d = d;
 		F.params = &zp;
 		double zdhere =0;
-		double zdmin = -4;
-		double zdmax = 2;
+		double zdmin = -4;double zdmin0 = zdmin;
+		double zdmax = 2;double zdmax0 = zdmax;
 		gsl_root_fsolver_set(zsolver,&F,zdmin,zdmax);
 		int zditer = 0;
 		int zdstatus;
@@ -4537,12 +4536,12 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 				break;
 
 		}while(zdstatus ==GSL_CONTINUE && zditer<100);
-	//	if(zdmin==-1 || zdmax == 1){
-	//		status ++;
+		if(zdmin<= zdmin0 || zdmax >= zdmax0){
+			status ++;
 	//		zdhere = zdmin>0 ? zdmax : zdmin; //did it converge to the top or bottom bound?
 	//	}else{
 	//		zdhere = 0.5*(zdmin+zdmax); //they're so close, just take the midpoint, off by 5e-6 at most
-	//	}
+		}
 		gsl_vector_set(zz_fd,d,zdhere);
 		gsl_root_fsolver_free(zsolver);
 		free(zp.fd_xg_surp);
@@ -4790,7 +4789,7 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 	gsl_matrix *residzz, * facs, *loadings,*xreg;
 	int t,c,fi,d,status = 0;
 	int T = mon_Z->size-1;
-	int iter,maxiter=2;
+	int iter,maxiter=1;
 	facs 	= gsl_matrix_alloc(T,Nfac);
 	loadings = gsl_matrix_alloc(Noccs,Nfac);
 	xreg	= gsl_matrix_calloc(T*Noccs,Noccs*(Nfac+1) +1);
@@ -4800,6 +4799,8 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 	vresidzz= gsl_vector_alloc(T*Noccs);
 	lvresidzz	= gsl_vector_alloc(T*Noccs);
 	coefregs= gsl_vector_alloc(Noccs*(Nfac+1)+1);
+	status =0;
+
 	// de-mean everything
 	double meanZ = 0.;
 	for(t=0;t<T;t++)
@@ -4845,8 +4846,9 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 			fd_fac_scale[fi] = sqrt(fd_fac_scale[fi]);
 		}
 	}
-	if(fix_fac==1)
-		maxiter=1;
+	//if(fix_fac==1)
+	// unclear if this is the right thing: now I will extract the factors once... can I just set them to zero?
+			maxiter=1;
 	for(iter=0;iter<maxiter;iter++){
 		if(fix_fac!=1){
 			status += pca(residzz,Nfac,1,1,loadings,facs);
@@ -4922,6 +4924,7 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 			for(t=0;t<T;t++)
 				var_zeta_ct += pow(vresidzz->data[c*T+t],2);
 			gsl_matrix_set(mats->var_zeta,c,c,var_zeta_ct/(double)T);
+			if(gsl_finite(var_zeta_ct) == 0) status++;
 		}
 	}
 	else if(homosk_zeta==1){
@@ -4944,6 +4947,18 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 		}
 		}
 	}
+	if(gsl_finite(mats->rhoZ) == 0) status ++;
+	if(gsl_finite(mats->rhozz) == 0) status ++;
+	for(d=0;d<Nfac;d++){
+		for(c=0;c<Nfac;c++){
+			if(gsl_finite(gsl_matrix_get(mats->Gamma,d,c) )==0) status++;
+			if(gsl_finite(gsl_matrix_get(mats->var_eta,d,c) )==0) status++;
+		}
+	}
+	for(c=0;c<coefregs->size;c++)
+		if(gsl_finite(gsl_vector_get(coefregs,c)) == 0) status++;
+
+
 
 	// free stuff!
 	gsl_matrix_free(facs);
