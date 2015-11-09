@@ -2695,15 +2695,25 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		if(zz_edges/simT > Noccs/2){ // more than half the time we're at the edge
 			if(verbose>=3) printf("hit the edge %d times\n",zz_edges);
 		}
+		// re-norm so that the mean is always zero:
+		double Zmean_esti = 0.;
+		double zzmean_esti[Noccs];
+		for(d=0;d<Noccs;d++) zzmean_esti[d] = 0.;
+		for(di=0;di<simT;di++){
+			Zmean_esti += gsl_matrix_get(Zhist,di)/(double)simT;
+			for(d=0;d<Noccs;d++)
+				zzmean_esti[d] += gsl_matrix_get(zhist,di,d)/(double)simT;
+		}
 
 		// copy the history of implied shocks in to the feed-in shocks (with a weighting)
 		for(di=0;di<simT;di++){
-			gsl_matrix_set(Zz_hist,di,0,zmt_upd*gsl_vector_get(Zhist,di)
+			gsl_matrix_set(Zz_hist,di,0,zmt_upd*(gsl_vector_get(Zhist,di) - Zmean_esti)
 										   + (1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,0));
 			for(d=0;d<Noccs;d++)
-				gsl_matrix_set(Zz_hist,di,d+Notz,zmt_upd*gsl_matrix_get(zhist,di,d)
+				gsl_matrix_set(Zz_hist,di,d+Notz,zmt_upd*(gsl_matrix_get(zhist,di,d) - zzmean_esti[d])
 												 +(1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,d+Notz));
 		}
+
 
 		// a few summary stats just to see:
 
