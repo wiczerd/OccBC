@@ -63,7 +63,7 @@ int opt_alg		= 3; // 10x => Nelder-Meade, 5x => Subplex, 3x => DFBOLS, o.w => BO
 int polish_alg	= 0;
 double ss_tol	= 1e-7; // tighten this with iterations?
 double dyn_tol	= 1e-7; // ditto?
-double zmt_upd	= .1;
+double zmt_upd	= .05;
 int homosk_zeta	= 0;
 int diag_zeta	= 1;
 int gsl_fin_diffs=0;
@@ -2626,18 +2626,24 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			double x_d[Noccs];
 			double d_x = 0;
 			for(d=0;d<Noccs;d++){
+				int goodl = 0;
 				fnd_d->data[d] = 0.0;
 				x_d[d] = 0.;
-				for(l=0;l<Noccs;l++){
+				for(l=0;l<Noccs+1;l++){
 					for(ll=0;ll<2;ll++){
-						fnd_d->data[d] += gsl_matrix_get(sol->ald,l+ll*(Noccs+1),d)*pld[l+ll*(Noccs+1)][d];
-						x_d[d] += gsl_matrix_get(sol->ald,l+ll*(Noccs+1),d);
+						if(gsl_matrix_get(sol->ald,l+ll*(Noccs+1),d) > 0. && pld[l+ll*(Noccs+1)][d] > 0.){
+							fnd_d->data[d] += gsl_matrix_get(sol->ald,l+ll*(Noccs+1),d)*pld[l+ll*(Noccs+1)][d];
+							x_d[d] += gsl_matrix_get(sol->ald,l+ll*(Noccs+1),d);
+							goodl ++;
+						}
 					}
 				}
-				d_fnd += fnd_d->data[d];
-				d_x   += x_d[d];
-				fnd_d->data[d] /= x_d[d];
-				gsl_matrix_set(fnd_d_hist,di,d,fnd_d->data[d]);
+				if(goodl>0){
+					d_fnd += fnd_d->data[d];
+					d_x   += x_d[d];
+					fnd_d->data[d] /= x_d[d];
+					gsl_matrix_set(fnd_d_hist,di,d,fnd_d->data[d]);
+				}
 			}
 			d_fnd /=d_x;
 			d_fnd = gsl_finite(d_fnd)==1? d_fnd : s_fnd*( (double)simT )/( (double) di);
@@ -2655,6 +2661,8 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 		}// end di = 1:simT
 		int zz_edges = 0;
+
+//#pragma omp parallel for private(di, fd_dat, pld, l,d,x, Zz, zz_invtheta)
 		for(di=0;di<simT;di++){
 			for(d=0;d<Noccs;d++) fd_dat[d] = gsl_matrix_get(simdat->fd_hist_dat,di,d) + s_fnd;
 			//setup x:
@@ -2727,25 +2735,28 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 		// update process matrices
 		if(status == 0){
-			mats0->rhozz   = mats1.rhozz;
-			mats0->rhoZ	   = mats1.rhoZ;
-			mats0->sig_eps2 = mats1.sig_eps2;
+			mats0->rhozz   = zmt_upd*mats1.rhozz + (1.-zmt_upd)*mats0->rhozz;
+			mats0->rhoZ	   = zmt_upd*mats1.rhoZ + (1.-zmt_upd)*mats0->rhoZ;
+			mats0->sig_eps2 = zmt_upd*mats1.sig_eps2 + (1.-zmt_upd)*mats0->sig_eps2;
 			for(d=0;d<Noccs;d++) {
 				for (l = 0; l < Nfac + 1; l++){
-					gsl_matrix_set(mats0->Lambda, d, l,gsl_matrix_get(mats1.Lambda, d, l));
+					gsl_matrix_set(mats0->Lambda, d, l,gsl_matrix_get(mats1.Lambda, d, l)*zmt_upd+
+								   gsl_matrix_get(mats0->Lambda, d, l)*(1.-zmt_upd));
 				}
 			}
 			for(d=0;d<Nfac;d++){
 				for(l=0;l<Nfac+1;l++) {
-					gsl_matrix_set(mats0->Gamma, d, l,gsl_matrix_get(mats1.Gamma, d, l));
-					gsl_matrix_set(mats0->var_eta, d, l,gsl_matrix_get(mats1.var_eta, d, l));
+					gsl_matrix_set(mats0->Gamma, d, l,gsl_matrix_get(mats1.Gamma, d, l)*zmt_upd +
+							gsl_matrix_get(mats0->Gamma, d, l)*(1.-zmt_upd));
+					gsl_matrix_set(mats0->var_eta, d, l,gsl_matrix_get(mats1.var_eta, d, l)*zmt_upd+
+							gsl_matrix_get(mats0->var_eta, d, l)*(1.-zmt_upd));
 
 				}
 			}
 			// resolve decision rules around the process
 			// essentially this is updating the matrices
-			// status += sys_ex_set(sys->N,sys->S,mats0);
-			// status += sol_dyn(ss,sol, sys,1);
+			status += sys_ex_set(sys->N,sys->S,mats0);
+			status += sol_dyn(ss,sol, sys,1);
 		}
 
 		double zdist_i = 0.0;
@@ -4018,7 +4029,14 @@ int fd_dat_sim(gsl_matrix * fd_hist_dat, struct shock_mats * fd_mats){
 			gsl_matrix_set(fd_hist_dat,t,d,fd_here);
 		}
 	}
-
+	double simdat_mean = 0.;
+	for(t=0;t<simT;t++){
+		for(d=0;d<Noccs;d++) simdat_mean += gsl_matrix_get(fd_hist_dat,t,d)/(double)Noccs;
+	}
+	simdat_mean /= (double)simT;
+	for(t=0;t<simT;t++){
+		for(d=0;d<Noccs;d++) gsl_matrix_set(fd_hist_dat,t,d, gsl_matrix_get(fd_hist_dat,t,d)-simdat_mean );
+	}
 
 
 	if(printlev >=1){
@@ -4394,6 +4412,7 @@ int theta(gsl_matrix * tld, const gsl_vector * ss, const struct sys_coef * sys, 
 struct zsol_params{
 	double *fd_xg_surp;
 	int d;
+	gsl_matrix * PP;
 };
 double zsol_resid(double zdhere, void *params){
 	double  resid;
@@ -4423,7 +4442,7 @@ double zsol_resid(double zdhere, void *params){
 	if(goodl >0){
 		resid = fd_here - avgp/avga;
 	} else
-		resid = fd_here; // put in a penalty for how negative was the surplus
+		resid = fd_here + exp(-zdhere); // put in a penalty for how negative was the surplus
 
 	return resid;
 }
@@ -4434,8 +4453,9 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 	// also requires tld and gld, but these are both in struct sys_sol * sol
 	// inverts theta to find a set of zld that are consistent.  Then takes the average across these to get the zd that will be realized
 
-	int status,l,d,ll,zlde_m1 ;
+	int status,l,d,ll,zlde_m1,iter;
 	status=0;
+	int maxiter = 1;
 	int JJ1	= Noccs*(Noccs+1);
 	int Nl 	= 2*(Noccs+1);
 	int Wl0_i = 0;
@@ -4446,7 +4466,8 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 	double ** pld_dat = malloc(sizeof(double*)*Nl);
 	for(l=0;l<Nl;l++)
 		pld_dat[l] = malloc(sizeof(double)*Noccs);
-	double fd_sim[Noccs];
+	double fd_sim[Noccs],meanzd;
+	gsl_vector * Es = gsl_vector_calloc(Ns);
 
 	status = 0;
 
@@ -4455,9 +4476,6 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 	ss_gld_i	= ss_Wld_i + JJ1;
 	ss_tld_i	= ss_gld_i + 2*JJ1;
 
-	gsl_vector * Es = gsl_vector_calloc(Ns);
-	gsl_vector_const_view ss_W = gsl_vector_const_subvector(ss,ss_Wl0_i,ss_gld_i-ss_Wl0_i);
-	status += Es_cal(Es, &ss_W.vector, sol->PP, Zz_in);
 
 	if(sol->tld==0){
 		tld = gsl_matrix_calloc(Nl,Noccs);
@@ -4473,20 +4491,141 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 		gld = sol->gld;
 	ald = sol->ald;
 
-	/*double avgcont= 0.;
-	for(d=0;d<Noccs;d++){
-		for(l=0;l<Noccs+1;l++){
-			for(ll=0;ll<2;ll++){
-				double cont = (Es->data[Wld_i + l * Noccs + d] -
-							   (1.0 - 1.0 / bdur) * Es->data[Wl0_i + l + ll * (Noccs + 1)] -
-							   1.0 / bdur * Es->data[Wl0_i + l + Noccs + 1]);
-				avgcont += cont/(double)(Noccs*Nl);
-			}
+	gsl_vector * Zz_here = gsl_vector_calloc(Zz_in->size);
+	gsl_vector_memcpy(Zz_here,Zz_in);
 
+
+	for(iter=0;iter<maxiter;iter++){
+		status=0;
+		meanzd = 0.;
+		gsl_vector_set_zero(Es);
+		gsl_vector_const_view ss_W = gsl_vector_const_subvector(ss,ss_Wl0_i,ss_gld_i-ss_Wl0_i);
+		status += Es_cal(Es, &ss_W.vector, sol->PP, Zz_here);
+
+		for(d=0;d<Noccs;d++){
+			gsl_function F;
+			F.function = &zsol_resid;
+			gsl_root_fsolver *zsolver = gsl_root_fsolver_alloc(gsl_root_fsolver_brent);
+
+			double fd_xg_surp[1+2*Nl];
+			// the fd part
+			fd_xg_surp[0] = fd_dat[d];
+
+			for(l=0;l<Noccs+1;l++){
+				for(ll=0;ll<2;ll++){
+					// the x * g part
+					fd_xg_surp[1+ll*(Noccs+1)+l] = gsl_matrix_get(ald,l+ll*(Noccs+1),d);
+
+					// i'll worry about it being non-negative surplus in zsol_resid
+					double bl = l>0 ? b[1]:b[0];
+
+					double nud = l == d + 1 ? 0 : nu;
+					double surp_minprod = -bl * (1. - (double) ll) - (double) ll * privn - nud;
+					// if this is not the first iteration, add in the continuation value
+					//if(iter>1) {
+						double cont = (Es->data[Wld_i + l * Noccs + d] -
+									   (1.0 - 1.0 / bdur) * Es->data[Wl0_i + l + ll * (Noccs + 1)] -
+									   1.0 / bdur * Es->data[Wl0_i + l + Noccs + 1]);
+
+						surp_minprod += beta * cont;
+					//}
+					fd_xg_surp[1+Nl+ll*(Noccs+1)+l] = surp_minprod;
+				}// end for ll=0:1
+			}
+			struct zsol_params zp;
+			zp.fd_xg_surp = malloc(sizeof(double)*(2*Nl+1));
+			for(l=0;l<1+2*Nl;l++) zp.fd_xg_surp[l] = fd_xg_surp[l];
+			zp.d = d;
+			F.params = &zp;
+			double zdhere =0;
+			double zdmin = log(b[1]); // can't be so low that no exerpienced worker would want to be there
+			double zdmin0 = zdmin;
+			double zdmax = -zdmin0; // this is ad hoc
+			double zdmax0 = zdmax;
+			gsl_root_fsolver_set(zsolver,&F,zdmin,zdmax);
+			int zditer = 0;
+			int zdstatus;
+			do{
+				zditer++;
+				zdstatus = gsl_root_fsolver_iterate(zsolver);
+				zdhere = gsl_root_fsolver_root(zsolver);
+				zdmin = gsl_root_fsolver_x_lower (zsolver);
+				zdmax = gsl_root_fsolver_x_upper (zsolver);
+				zdstatus = gsl_root_test_interval(zdmin,zdmax,1e-5,1e-5);
+				if(zdstatus == GSL_SUCCESS)
+					break;
+
+			}while(zdstatus ==GSL_CONTINUE && zditer<100);
+			if(zdmin<= zdmin0 || zdmax >= zdmax0){
+				status ++;
+				//		zdhere = zdmin>0 ? zdmax : zdmin; //did it converge to the top or bottom bound?
+				//	}else{
+				//		zdhere = 0.5*(zdmin+zdmax); //they're so close, just take the midpoint, off by 5e-6 at most
+			}
+			gsl_vector_set(zz_fd,d,zdhere);
+			meanzd += zdhere/(double)Noccs;
+			gsl_root_fsolver_free(zsolver);
+			free(zp.fd_xg_surp);
+			if(iter<maxiter-1){
+				gsl_vector_set(Zz_here,d+Notz,zmt_upd*zdhere + (1.-zmt_upd)*gsl_vector_get(Zz_here,d+Notz));
+			}
+			else
+				gsl_vector_set(Zz_here,d+Notz,zdhere );
 		}
 
-	}*/
+		gsl_vector_set(Zz_here,0,meanzd);
+		for(d=0;d<Nfac;d++)gsl_vector_set(Zz_here,1+d,0.);
+	}
 
+
+
+	if(sol->tld==0)
+		gsl_matrix_free(tld);
+	if(sol->gld==0)
+		gsl_matrix_free(gld);
+
+	gsl_vector_free(Zz_here);
+	gsl_matrix_free(zlde);
+	gsl_vector_free(Es);
+	for(l=0;l<Nl;l++)
+		free(pld_dat[l]);
+	free(pld_dat);
+
+
+	return status;
+}
+/*
+Zzsol_resid(double * zz, void * params){
+
+	int JJ1	= Noccs*(Noccs+1);
+	int Nl 	= 2*(Noccs+1);
+	int Wl0_i = 0;
+	int Wld_i = Wl0_i + Nl;
+	int ss_gld_i, ss_tld_i, ss_Wld_i,ss_Wl0_i, status;
+ 	struct zsol_params * zp =(struct zsol_params *) params;
+	double *fd_xg_surp = zp->fd_xg_surp;
+	int d,l,ll;
+	gsl_matrix * PP = zp->PP;
+	double meanzd;
+	gsl_vector * Zz_here = gsl_vector_calloc(Nx);
+	gsl_vector * Es = gsl_vector_calloc(Ns);
+
+	status = 0;
+
+	ss_Wl0_i	= 0;
+	ss_Wld_i	= ss_Wl0_i + Nl;
+	ss_gld_i	= ss_Wld_i + JJ1;
+	ss_tld_i	= ss_gld_i + 2*JJ1;
+
+
+	meanzd = 0.;
+	for(d=0;d<Noccs;d++) meanzd += zz[d]/(double) Noccs;
+	for(d=0;d<Noccs;d++) gsl_vector_set(Zz_here,d+Notz,zz[d]);
+	gsl_vector_set(Zz_here,0,meanzd);
+	gsl_vector_set_zero(Es);
+
+	gsl_vector_const_view ss_W = gsl_vector_const_subvector(ss,ss_Wl0_i,ss_gld_i-ss_Wl0_i);
+	status += Es_cal(Es, &ss_W.vector, PP, Zz_here);
 
 	for(d=0;d<Noccs;d++){
 		gsl_function F;
@@ -4506,22 +4645,29 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 				double bl = l>0 ? b[1]:b[0];
 
 				double nud = l == d + 1 ? 0 : nu;
+				double surp_minprod = -bl * (1. - (double) ll) - (double) ll * privn - nud;
+				// if this is not the first iteration, add in the continuation value
+				//if(iter>1) {
 				double cont = (Es->data[Wld_i + l * Noccs + d] -
 							   (1.0 - 1.0 / bdur) * Es->data[Wl0_i + l + ll * (Noccs + 1)] -
 							   1.0 / bdur * Es->data[Wl0_i + l + Noccs + 1]);
 
-				double surp_minprod = -bl * (1. - (double) ll) - (double) ll * privn - nud + beta * cont;
+				surp_minprod += beta * cont;
+				//}
 				fd_xg_surp[1+Nl+ll*(Noccs+1)+l] = surp_minprod;
 			}// end for ll=0:1
 		}
+
 		struct zsol_params zp;
 		zp.fd_xg_surp = malloc(sizeof(double)*(2*Nl+1));
 		for(l=0;l<1+2*Nl;l++) zp.fd_xg_surp[l] = fd_xg_surp[l];
 		zp.d = d;
 		F.params = &zp;
 		double zdhere =0;
-		double zdmin = -4;double zdmin0 = zdmin;
-		double zdmax = 2;double zdmax0 = zdmax;
+		double zdmin = log(b[1]); // can't be so low that no exerpienced worker would want to be there
+		double zdmin0 = zdmin;
+		double zdmax = -zdmin0; // this is ad hoc
+		double zdmax0 = zdmax;
 		gsl_root_fsolver_set(zsolver,&F,zdmin,zdmax);
 		int zditer = 0;
 		int zdstatus;
@@ -4538,20 +4684,166 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 		}while(zdstatus ==GSL_CONTINUE && zditer<100);
 		if(zdmin<= zdmin0 || zdmax >= zdmax0){
 			status ++;
-	//		zdhere = zdmin>0 ? zdmax : zdmin; //did it converge to the top or bottom bound?
-	//	}else{
-	//		zdhere = 0.5*(zdmin+zdmax); //they're so close, just take the midpoint, off by 5e-6 at most
+			//		zdhere = zdmin>0 ? zdmax : zdmin; //did it converge to the top or bottom bound?
+			//	}else{
+			//		zdhere = 0.5*(zdmin+zdmax); //they're so close, just take the midpoint, off by 5e-6 at most
 		}
 		gsl_vector_set(zz_fd,d,zdhere);
+		meanzd += zdhere/(double)Noccs;
 		gsl_root_fsolver_free(zsolver);
 		free(zp.fd_xg_surp);
+		if(iter<maxiter-1){
+			gsl_vector_set(Zz_here,d+Notz,zmt_upd*zdhere + (1.-zmt_upd)*gsl_vector_get(Zz_here,d+Notz));
+		}
+		else
+			gsl_vector_set(Zz_here,d+Notz,zdhere );
 	}
+
+	gsl_vector_set(Zz_here,0,meanzd);
+	for(d=0;d<Nfac;d++)gsl_vector_set(Zz_here,1+d,0.);
+	gsl_matrix_free(Zz_here);
+}
+*/
+/*
+int invtheta_Zz(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_matrix * xx,
+			   const gsl_vector * ss, const struct sys_coef * sys, const struct sys_sol * sol, const gsl_vector * Zz_in) {
+	// just like invtheta_z, but does the whole vector at once
+	// also requires tld and gld, but these are both in struct sys_sol * sol
+	// inverts theta to find a set of zld that are consistent.  Then takes the average across these to get the zd that will be realized
+
+	int status,l,d,ll,zlde_m1,iter;
+	status=0;
+	int maxiter = 1;
+	int JJ1	= Noccs*(Noccs+1);
+	int Nl 	= 2*(Noccs+1);
+	int Wl0_i = 0;
+	int Wld_i = Wl0_i + Nl;
+	int ss_gld_i, ss_tld_i, ss_Wld_i,ss_Wl0_i;
+	gsl_matrix * gld, *tld, *ald;
+	gsl_matrix * zlde = gsl_matrix_calloc(Nl,Noccs);
+	double ** pld_dat = malloc(sizeof(double*)*Nl);
+	for(l=0;l<Nl;l++)
+		pld_dat[l] = malloc(sizeof(double)*Noccs);
+	double fd_sim[Noccs],meanzd;
+	gsl_vector * Es = gsl_vector_calloc(Ns);
+
+	status = 0;
+
+	ss_Wl0_i	= 0;
+	ss_Wld_i	= ss_Wl0_i + Nl;
+	ss_gld_i	= ss_Wld_i + JJ1;
+	ss_tld_i	= ss_gld_i + 2*JJ1;
+
+
+	if(sol->tld==0){
+		tld = gsl_matrix_calloc(Nl,Noccs);
+		status += theta(tld, ss, sys, sol, Zz_in);
+	}
+	else
+		tld = sol->tld;
+	if(sol->gld==0){
+		gld = gsl_matrix_calloc(Nl,Noccs);
+		status += gpol(gld, ss, sys, sol, Zz_in);
+	}
+	else
+		gld = sol->gld;
+	ald = sol->ald;
+
+	gsl_vector * Zz_here = gsl_vector_calloc(Zz_in->size);
+	gsl_vector_memcpy(Zz_here,Zz_in);
+
+
+	for(iter=0;iter<maxiter;iter++){
+		status=0;
+		meanzd = 0.;
+		gsl_vector_set_zero(Es);
+		gsl_vector_const_view ss_W = gsl_vector_const_subvector(ss,ss_Wl0_i,ss_gld_i-ss_Wl0_i);
+		status += Es_cal(Es, &ss_W.vector, sol->PP, Zz_here);
+
+		for(d=0;d<Noccs;d++){
+			gsl_function F;
+			F.function = &zsol_resid;
+			gsl_root_fsolver *zsolver = gsl_root_fsolver_alloc(gsl_root_fsolver_brent);
+
+			double fd_xg_surp[1+2*Nl];
+			// the fd part
+			fd_xg_surp[0] = fd_dat[d];
+
+			for(l=0;l<Noccs+1;l++){
+				for(ll=0;ll<2;ll++){
+					// the x * g part
+					fd_xg_surp[1+ll*(Noccs+1)+l] = gsl_matrix_get(ald,l+ll*(Noccs+1),d);
+
+					// i'll worry about it being non-negative surplus in zsol_resid
+					double bl = l>0 ? b[1]:b[0];
+
+					double nud = l == d + 1 ? 0 : nu;
+					double surp_minprod = -bl * (1. - (double) ll) - (double) ll * privn - nud;
+					// if this is not the first iteration, add in the continuation value
+					//if(iter>1) {
+					double cont = (Es->data[Wld_i + l * Noccs + d] -
+								   (1.0 - 1.0 / bdur) * Es->data[Wl0_i + l + ll * (Noccs + 1)] -
+								   1.0 / bdur * Es->data[Wl0_i + l + Noccs + 1]);
+
+					surp_minprod += beta * cont;
+					//}
+					fd_xg_surp[1+Nl+ll*(Noccs+1)+l] = surp_minprod;
+				}// end for ll=0:1
+			}
+
+			struct zsol_params zp;
+			zp.fd_xg_surp = malloc(sizeof(double)*(2*Nl+1));
+			for(l=0;l<1+2*Nl;l++) zp.fd_xg_surp[l] = fd_xg_surp[l];
+			zp.d = d;
+			F.params = &zp;
+			double zdhere =0;
+			double zdmin = log(b[1]); // can't be so low that no exerpienced worker would want to be there
+			double zdmin0 = zdmin;
+			double zdmax = -zdmin0; // this is ad hoc
+			double zdmax0 = zdmax;
+			gsl_root_fsolver_set(zsolver,&F,zdmin,zdmax);
+			int zditer = 0;
+			int zdstatus;
+			do{
+				zditer++;
+				zdstatus = gsl_root_fsolver_iterate(zsolver);
+				zdhere = gsl_root_fsolver_root(zsolver);
+				zdmin = gsl_root_fsolver_x_lower (zsolver);
+				zdmax = gsl_root_fsolver_x_upper (zsolver);
+				zdstatus = gsl_root_test_interval(zdmin,zdmax,1e-5,1e-5);
+				if(zdstatus == GSL_SUCCESS)
+					break;
+
+			}while(zdstatus ==GSL_CONTINUE && zditer<100);
+			if(zdmin<= zdmin0 || zdmax >= zdmax0){
+				status ++;
+				//		zdhere = zdmin>0 ? zdmax : zdmin; //did it converge to the top or bottom bound?
+				//	}else{
+				//		zdhere = 0.5*(zdmin+zdmax); //they're so close, just take the midpoint, off by 5e-6 at most
+			}
+			gsl_vector_set(zz_fd,d,zdhere);
+			meanzd += zdhere/(double)Noccs;
+			gsl_root_fsolver_free(zsolver);
+			free(zp.fd_xg_surp);
+			if(iter<maxiter-1){
+				gsl_vector_set(Zz_here,d+Notz,zmt_upd*zdhere + (1.-zmt_upd)*gsl_vector_get(Zz_here,d+Notz));
+			}
+			else
+				gsl_vector_set(Zz_here,d+Notz,zdhere );
+		}
+
+		gsl_vector_set(Zz_here,0,meanzd);
+		for(d=0;d<Nfac;d++)gsl_vector_set(Zz_here,1+d,0.);
+	}
+
+
 
 	if(sol->tld==0)
 		gsl_matrix_free(tld);
 	if(sol->gld==0)
 		gsl_matrix_free(gld);
 
+	gsl_vector_free(Zz_here);
 	gsl_matrix_free(zlde);
 	gsl_vector_free(Es);
 	for(l=0;l<Nl;l++)
@@ -4562,6 +4854,7 @@ int invtheta_z(gsl_vector * zz_fd, double ** pld, const double * fd_dat, gsl_mat
 	return status;
 }
 
+*/
 int xprime(gsl_matrix * xp, gsl_matrix * ald, gsl_vector * ss, const struct sys_coef * sys, const struct sys_sol * sol, const gsl_matrix * x, const gsl_vector * Zz){
 	// writes xp and also ald, which is the number of applicants to each d conditional on l (2*(Noccs+1) X Noccs)
 
