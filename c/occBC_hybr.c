@@ -56,7 +56,7 @@ int printlev 	= 3;
 int rescale_var	= 0;
 int check_fin	= 0;
 int homosk_psi	= 1;
-int sym_occs	= 1;
+int sym_occs	= 0;
 int use_anal	= 1; // this governs whether the perturbation uses analytic derivatives
 int fix_fac		= 0; // this allows f_t to be free when estimating.  o.w. the path of f_t, gamma and var_eta are fixed.
 int opt_alg		= 3; // 10x => Nelder-Meade, 5x => Subplex, 3x => DFBOLS, o.w => BOBYQA
@@ -2778,13 +2778,16 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			// essentially this is updating the matrices
 			status += sys_ex_set(sys->N,sys->S,mats0);
 			status += sol_dyn(ss,sol, sys,1);
+		}else{
+			printmat("zhist_bad.csv",zhist);
+			printvec("Zhist_bad.csv",Zhist);
 		}
 
 		double zdist_i = 0.0;
 		gsl_matrix_sub(zhist0,zhist);
 		//if(estiter % 2 == 0)
-		//if(printlev>=4 || status >0){
-			printf("rhozz, rhoZ,s_urt,e^Z = %f,%f,%f,%f \n",mats0->rhozz,mats0->rhoZ,s_urt,exp(Zmean_esti));
+		if(printlev>=4 || status >0 || estiter%50 ==0 ){
+			printf("rhozz, rhoZ,s_urt,e^Z, status = %f,%f,%f,%f,%d \n",mats0->rhozz,mats0->rhoZ,s_urt,exp(Zmean_esti),status);
 			printmat("zhist_in.csv",zhist);
 			printmat("xd_hist.csv",xd_hist);
 			printmat("zhist_dist.csv",zhist0);
@@ -2795,7 +2798,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			}
 			printmat("LambdaSol.csv",mats1.Lambda);
 			printmat("var_zetaSol.csv",mats1.var_zeta);
-		//}
+		}
 		int NTz = zhist0->size1*zhist0->size2;
 		for(d=0;d<NTz;d++)
 			zdist_i += pow(zhist0->data[d],2)/(double)NTz;
@@ -4474,8 +4477,9 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 	// also requires tld and gld, but these are both in struct sys_sol * sol
 	// inverts theta to find a set of zld that are consistent.  Then takes the average across these to get the zd that will be realized
 
-	int status,l,d,ll,zlde_m1,iter;
+	int status,l,d,ll,zlde_m1,iter,seed;
 	status=0;
+	clock_t seedt;
 	int maxiter = 1;
 	int JJ1	= Noccs*(Noccs+1);
 	int Nl 	= 2*(Noccs+1);
@@ -4518,6 +4522,7 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 
 
 	for(iter=0;iter<maxiter;iter++){
+		if(iter>0) seedt = clock(); // may need to initialize a seed
 		status=0;
 		meanzd = 0.;
 		gsl_vector_set_zero(Es);
@@ -4593,6 +4598,24 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 			}
 			else
 				gsl_vector_set(Zz_here,d+Notz,zdhere );
+		}
+		if(status == Noccs){ // this means hit the boundary on every one, I need to do something to keep it full rank.
+			if(maxiter<=1)
+				maxiter ++; // first try running it again which the higher Zz_here
+			else{ // need to throw in white-noise so the row doesn't make the matrix singular
+
+				gsl_rng * rnghere = gsl_rng_alloc(gsl_rng_default);
+				time_t timenow;
+				timenow = time(NULL);
+				seedt = clock() - seedt;
+				seed  = (int) seedt + (int) timenow;
+				gsl_rng_set (rnghere, seed);
+				for(d=0;d<Noccs;d++)
+					zz_fd[d] += (gsl_rng_uniform(rnghere)-0.5)/100.;
+
+				gsl_rng_free(rnghere);
+			}
+
 		}
 
 		gsl_vector_set(Zz_here,0,meanzd);
@@ -5952,7 +5975,7 @@ int set_params(const double * x, int cal_set){
 			}
 		}
 		double chi_lb = 0.25;
-		double chi_ub = 0.95;
+		double chi_ub = 0.9;
 		for(l=1;l<Noccs+1;l++){
 			for(d=0;d<Noccs;d++){
 				if(l!=d+1){
@@ -5961,14 +5984,13 @@ int set_params(const double * x, int cal_set){
 				}
 			}
 		}
-
+		double mean_chi = 0.0;
 		for(d=0;d<Noccs;d++){
-			double mean_chi = 0.0;
 			for(l=1;l<Noccs+1;l++)
 				mean_chi = l!=d+1 ? chi[l][d] + mean_chi : mean_chi;
-			chi[0][d] = mean_chi/((double)Noccs-1.0);
-
 		}
+		for(d=0;d<Noccs;d++)
+			chi[0][d] = mean_chi/(double)(Noccs*(Noccs-1));
 		for(d=0;d<Noccs;d++)
 			chi[d+1][d] = 1.0;
 	}
