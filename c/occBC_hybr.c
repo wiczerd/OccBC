@@ -293,7 +293,7 @@ int main(int argc,char *argv[]){
 	printf("Begining, Calflag = %d, USE_MKL=%d,USE_DFBOLS=%d\n",calflag,_MKL_USE,_DFBOLS_USE);
 #endif
 
-	f_skills = gsl_matrix_alloc(Noccs,6);
+	f_skills = gsl_matrix_alloc(Noccs,5);
 	readmat("rf_skills.csv",f_skills);
 
 	if(printlev>=2)	printmat("Readf_skills.csv" ,f_skills);
@@ -2510,6 +2510,32 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		for(d=0;d<Noccs;d++)
 		gsl_matrix_set(Zz_hist,di,d+Notz,gsl_matrix_get(simdat->fd_hist_dat,di,d));
 	}
+	// re-norm so that the mean of e(z) is always 1:
+	double Zmean_esti = 0.;
+	double zzmean_esti[Noccs];
+	for(d=0;d<Noccs;d++) zzmean_esti[d] = 0.;
+	for(di=0;di<simT;di++){
+		Zmean_esti += gsl_matrix_get(Zz_hist,di,0)/(double)simT;
+		for(d=0;d<Noccs;d++)
+			zzmean_esti[d] += gsl_matrix_get(Zz_hist,di,Notz+d)/(double)simT;
+	}
+	double Zvar_esti = 0.;
+	double zzvar_esti[Noccs];
+	for(d=0;d<Noccs;d++) zzvar_esti[d] = 0.;
+	for(di=0;di<simT;di++){
+		Zvar_esti += pow(gsl_matrix_get(Zz_hist,di,0) - Zmean_esti,2)/(double)simT;
+		for(d=0;d<Noccs;d++)
+			zzvar_esti[d] += pow(gsl_matrix_get(Zz_hist,di,Notz+d)-zzvar_esti[d],2)/(double)simT;
+	}
+	for(di=0;di<simT;di++){
+		gsl_matrix_set(Zz_hist,di,0,gsl_matrix_get(Zz_hist,di,0)-Zmean_esti-Zvar_esti/2 );
+		for(d=0;d<Noccs;d++)
+			gsl_matrix_set(Zz_hist,di,Notz+d,gsl_matrix_get(Zz_hist,di,Notz+d)-zzmean_esti[d]-zzvar_esti[d]/2);
+	}
+
+
+
+
 	printmat("Zz_hist0.csv",Zz_hist);
 
 	// compute the standard deviation of finding for each occupation
@@ -2700,9 +2726,41 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		if(zz_edges/simT > Noccs/2){ // more than half the time we're at the edge
 			if(verbose>=3) printf("hit the edge %d times\n",zz_edges);
 		}
+
+		// copy the history of implied shocks in to the feed-in shocks (with a weighting)
+		for(di=0;di<simT;di++){
+			gsl_matrix_set(Zz_hist,di,0,zmt_upd*gsl_vector_get(Zhist,di)
+										+ (1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,0));
+			for(d=0;d<Noccs;d++)
+				gsl_matrix_set(Zz_hist,di,d+Notz,zmt_upd*gsl_matrix_get(zhist,di,d)
+												 +(1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,d+Notz));
+		}
 		// re-norm so that the mean of e(z) is always 1:
-		double Zmean_esti = 0.;
-		double zzmean_esti[Noccs];
+		Zmean_esti = 0.;
+		for(d=0;d<Noccs;d++) zzmean_esti[d] = 0.;
+		for(di=0;di<simT;di++){
+			Zmean_esti += gsl_matrix_get(Zz_hist,di,0)/(double)simT;
+			for(d=0;d<Noccs;d++)
+				zzmean_esti[d] += gsl_matrix_get(Zz_hist,di,d+Notz)/(double)simT;
+		}
+		double Zvar_esti = 0.;
+		double zzvar_esti[Noccs];
+		for(d=0;d<Noccs;d++) zzvar_esti[d] = 0.;
+		for(di=0;di<simT;di++){
+			Zvar_esti += pow(gsl_matrix_get(Zz_hist,di,0) - Zmean_esti,2)/(double)simT;
+			for(d=0;d<Noccs;d++)
+				zzvar_esti[d] += pow(gsl_matrix_get(Zz_hist,di,d+Notz)-zzvar_esti[d],2)/(double)simT;
+		}
+		for(di=0;di<simT;di++){
+			gsl_matrix_set(Zz_hist,di,0,gsl_matrix_get(Zz_hist,di,0)-Zmean_esti-Zvar_esti/2 );
+			for(d=0;d<Noccs;d++)
+				gsl_matrix_set(Zz_hist,di,Notz+d,gsl_matrix_get(Zz_hist,di,Notz+d)-zzmean_esti[d]-zzvar_esti[d]/2);
+		}
+
+
+
+
+		/*Zmean_esti = 0.;
 		for(d=0;d<Noccs;d++) zzmean_esti[d] = 0.;
 		for(di=0;di<simT;di++){
 			Zmean_esti += gsl_vector_get(Zhist,di)/(double)simT;
@@ -2726,7 +2784,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 				gsl_matrix_set(Zz_hist,di,d+Notz,zmt_upd*(gsl_matrix_get(zhist,di,d) - zzmean_esti[d] - zzvar_esti[d]/2)
 												 +(1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,d+Notz));
 		}
-
+		*/
 
 		// a few summary stats just to see:
 		if(printlev>=2){
@@ -6052,7 +6110,7 @@ int set_params(const double * x, int cal_set){
 			}
 		}
 		double chi_lb = 0.25;
-		double chi_ub = 1.1;
+		double chi_ub = 1.2;
 		for(l=1;l<Noccs+1;l++){
 			for(d=0;d<Noccs;d++){
 				if(l!=d+1){
