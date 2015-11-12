@@ -583,7 +583,6 @@ int main(int argc,char *argv[]){
  	// update and solve the stochastic process
 	status += sol_zproc(st, st->ss, st->xss,st->mats);
 
-	/*
 	//status += ss_moments(&simdat, ss, xss);
 	if(status ==0)
 		status += sim_moments(st,st->ss,st->xss);
@@ -592,7 +591,7 @@ int main(int argc,char *argv[]){
 		printf ("It took %d clicks (%f seconds).\n",t,((float)t)/CLOCKS_PER_SEC);
 	}
 
-	//	TGR experiment
+	/*/	TGR experiment
 
 	if(status ==0)
 		status +=  TGR(st);//TGR(u_dur_dist,opt_dur_dist,fnd_dist,opt_fnd_dist,&urt,&opt_urt,st);
@@ -865,9 +864,9 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 	// will solve the ss with
 	//vars = [ x U_l0 U_ld J_ld gld wld thetald sld] in row-major order, i.e. {(0,1),(0,2),...,(J,J)}
 
-	int status,l,d,dd,ll,iter,itermax,i,allocZz, JJ1;
+	int status,l,d,dd,ll,iter,itermax,itermin,i,allocZz, JJ1;
 	itermax = 2500;
-	
+	itermin = 100;
 	gsl_vector 	* W_l0,*W_ld, *lW_l0;
 	gsl_vector 	* Uw_ld;
 	gsl_vector 	* gld,*lgld,*thetald,*findrt, *sld;
@@ -956,6 +955,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 		gsl_vector_memcpy(lW_l0,W_l0);
 		int vfiter;
 		int vfitermax = break_flag == 1 ? itermax : itermax/2;
+		if( vfitermax <itermin) vfitermax = itermin;
 		if(iter==0){
 		for(vfiter =0;vfiter<itermax/2;vfiter++){
 			maxdistW0 = 0.0;
@@ -1074,9 +1074,9 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 						double gg, ggerr;
 						#pragma omp critical
 						{
-							gsl_integration_qags(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
-							//size_t neval;
-							//gsl_integration_qng(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, &gg, &ggerr,&neval);
+						//	gsl_integration_qags(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
+							size_t neval;
+							gsl_integration_qng(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, &gg, &ggerr,&neval);
 						}
 						sexpret_dd += gg;
 						gsl_vector_set(gld, l * Noccs + d + ll * JJ1, gg);
@@ -1096,10 +1096,10 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 				// check it was pretty close to 1
 				if( fabs(sexpret_dd-1.) > 1.e-2){
 					solerr = fopen(soler_f,"a+");
-					fprintf(solerr,"SS choice probabilities added to %f != 1 at (l,d)=(%d,%d)\n",sexpret_dd,l,dd);
+					fprintf(solerr,"SS choice probabilities added to %f != 1 at (l,ll)=(%d,%d)\n",sexpret_dd,l,ll);
 					fclose(solerr);
 					if(verbose>=2)
-						printf("SS choice probabilities add to %f != 1 at (l,d)=(%d,%d)\n",sexpret_dd,l,dd);
+						printf("SS choice probabilities add to %f != 1 at (l,ll)=(%d,%d)\n",sexpret_dd,l,ll);
 				}
 
 				//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -1248,13 +1248,12 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 			}
 		}
 
-
 		// this is actually testing the condition for iteration convergence above
 		if(break_flag ==1)
 			break;
 		else if(maxdistW0 < ss_tol && iter>=10)
 			break_flag=1;
-		else if((fabs(maxdistW0 - lmaxdistW0) < ss_tol) & (maxdistW0< ss_tol*20) & (iter>100)){
+		else if((fabs(maxdistW0 - lmaxdistW0) < ss_tol) & (maxdistW0< ss_tol*20) & (iter>itermin) ){
 			break_flag=1;
 			//if(verbose>=2) printf("Not making progress in SS from %f\n",maxdistW0);
 			//if(printlev>=1){
@@ -1345,7 +1344,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 		printvec("thetald_i.csv",thetald);
 		printmat("m_distg.csv",m_distg);
 		printvec("findrt_i.csv",findrt);
-
+		if(verbose>=3) printf("Converged in %d iters\n", iter-1);
 	}
 
 	// calculate xss the right way!
@@ -2730,24 +2729,23 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 
 		// a few summary stats just to see:
-
-		double pd_sim_mean[Noccs];
-		double pd_sim_sd[Noccs];
-		for(d=0;d<Noccs;d++){
-			fd_sim_sd[d] = 0;
-			fd_sim_mean[d] = 0.;
-			for(di=0;di<simT;di++) fd_sim_mean[d] += gsl_matrix_get(fnd_d_hist,di,d)/(double)simT;
-			for(di=0;di<simT;di++) fd_sim_sd[d] += pow(gsl_matrix_get(fnd_d_hist,di,d) -fd_sim_mean[d],2)/(double)simT;
-			fd_sim_sd[d] = pow(fd_sim_sd[d],0.5);
-			// difference in standard deviation:
-			fd_datsim_sd[d] = fd_sim_sd[d]/fd_dat_sd[d];
-			pd_sim_sd[d] = 0;
-			pd_sim_mean[d] = 0.;
-			for(di=0;di<simT;di++) pd_sim_mean[d] += pd_hist[di][d]/(double)simT;
-			for(di=0;di<simT;di++) pd_sim_sd[d] += pow(pd_hist[di][d] -pd_sim_mean[d],2)/(double)simT;
-			pd_sim_sd[d] = pow(pd_sim_sd[d],0.5);
-
-
+		if(printlev>=2){
+			double pd_sim_mean[Noccs];
+			double pd_sim_sd[Noccs];
+			for(d=0;d<Noccs;d++){
+				fd_sim_sd[d] = 0;
+				fd_sim_mean[d] = 0.;
+				for(di=0;di<simT;di++) fd_sim_mean[d] += gsl_matrix_get(fnd_d_hist,di,d)/(double)simT;
+				for(di=0;di<simT;di++) fd_sim_sd[d] += pow(gsl_matrix_get(fnd_d_hist,di,d) -fd_sim_mean[d],2)/(double)simT;
+				fd_sim_sd[d] = pow(fd_sim_sd[d],0.5);
+				// difference in standard deviation:
+				fd_datsim_sd[d] = fd_sim_sd[d]/fd_dat_sd[d];
+				pd_sim_sd[d] = 0;
+				pd_sim_mean[d] = 0.;
+				for(di=0;di<simT;di++) pd_sim_mean[d] += pd_hist[di][d]/(double)simT;
+				for(di=0;di<simT;di++) pd_sim_sd[d] += pow(pd_hist[di][d] -pd_sim_mean[d],2)/(double)simT;
+				pd_sim_sd[d] = pow(pd_sim_sd[d],0.5);
+			}
 		}
 
 
@@ -2807,13 +2805,18 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			zdist_i += pow(zhist0->data[d],2)/(double)NTz;
 		zdist_i = sqrt(zdist_i);
 		gsl_vector_set(zdist_hist,estiter,zdist_i);
+		double zdist_av = 0;
+		for(ll=estiter-19;ll<estiter+1;ll++) zdist_av += gsl_vector_get(zdist_hist,ll)/20.;
+		double zdist_av_l = 0;
+		for(ll=estiter-39;ll<estiter-20;ll++) zdist_av_l += gsl_vector_get(zdist_hist,ll)/20.;
+
 		if(verbose_old>1){
 			if(estiter==0) printf("stoch proc, iter: ");
 			else printf(".");
 		}
 
 		// converged on the right z process
-		if(zdist_i<1e-4)
+		if(zdist_i<1e-4 || (zdist_av >zdist_av_l+1e-4 && zdist_i<1e-2) )
 			break;
 		gsl_matrix_memcpy(zhist0,zhist);
 	}// end estiter
@@ -3242,17 +3245,41 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 					double wld_ld = (1. - fm_shr) *
 							   (chi[l][d] * exp(zd) - bl * (1. - (double) ll) - privn * (double) ll - nud)
 						+ bl*(1.-(double)ll) + privn*(double)ll ;
-					if (wld_ld > chi[l+ll*(Noccs+1)][d])
-						gsl_matrix_set(wld,l+ll*(Noccs+1),d,chi[l+ll*(Noccs+1)][d]);
+					if (wld_ld > chi[l][d])
+						gsl_matrix_set(wld,l+ll*(Noccs+1),d,chi[l][d]);
 					else if(wld_ld < bl*(1.-(double)ll) + privn*(double)ll)
 						gsl_matrix_set(wld,l+ll*(Noccs+1),d,bl*(1.-(double)ll) + privn*(double)ll );
 					else
 						gsl_matrix_set(wld,l+ll*(Noccs+1),d,wld_ld);
-
-
 				}
 			}
 		}
+		// take out occupation fixed effects and re-norm to the average, just in case:
+		double Ewg_d[Noccs];
+		double Ewg = 0.;
+		double xwg = 0.;
+		for(d=0;d<Noccs;d++){
+			Ewg_d[d] =0;
+			double xwg_d =0;
+			for(l=0;l<Noccs+1;l++){
+				Ewg_d[d] += log(gsl_matrix_get(wld,l,d))*gsl_matrix_get(xp,l,d+1);
+				xwg_d += gsl_matrix_get(xp,l,d+1);
+				Ewg += Ewg_d[d];
+				xwg += xwg_d;
+			}
+			Ewg_d[d] /= xwg_d;
+			Ewg_d[d]  = exp(Ewg_d[d]);
+		}
+		Ewg /= xwg;
+		Ewg  = exp(Ewg);
+		double ** wldFE = malloc(sizeof(double*)*Nl);
+		for(l=0;l<Nl;l++)
+			wldFE[l] = malloc(sizeof(double)*Noccs);
+		for(d=0;d<Noccs;d++){
+			for(l=0;l<Nl;l++)
+				wldFE[l][d] = gsl_matrix_get(wld,l,d)/Ewg_d[d]*Ewg;
+		}
+
 
 		double d_wg = 0.0;
 		double x_wg = 0.0;
@@ -3260,7 +3287,7 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 			for(d=0;d<Noccs;d++){
 				if(l!=d+1){
 					d_wg += (gsl_matrix_get(x,l,d+1))*
-							(gsl_matrix_get(wld,d+1,d) - gsl_matrix_get(wld,l,d));
+							log(gsl_matrix_get(wld,d+1,d) / gsl_matrix_get(wld,l,d));
 					x_wg += (gsl_matrix_get(x,l,d+1));
 				}
 			}
@@ -3278,9 +3305,10 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 		double sx_wl= 0.0;
 		for(l=1;l<Nl;l++){
 			for(d=0;d<Noccs;d++){
-				if(l!=d+1&& l-Noccs-1!=d+1){
-					d_wl +=gsl_matrix_get(sol->ald,l,d)*pld[l][d] *(gsl_matrix_get(wld,l,l-1) - gsl_matrix_get(wld,l,d));
-					sx_wl +=gsl_matrix_get(sol->ald,l,d)*pld[l][d];
+				if(l%(Noccs+1)!=d+1 && l%(Noccs+1)!=0){
+					//d_wl +=gsl_matrix_get(sol->ald,l,d)*pld[l][d] *log(gsl_matrix_get(wld,l,d)/gsl_matrix_get(wld,l,l%(Noccs+1)-1) );
+					d_wl  += gsl_matrix_get(sol->ald,l,d)*pld[l][d] *log(wldFE[l][d]/wldFE[l%(Noccs+1)][l%(Noccs+1)-1]);
+					sx_wl += gsl_matrix_get(sol->ald,l,d)*pld[l][d] ;
 				}
 			}
 		}
@@ -3300,7 +3328,11 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 				for(d=0;d<Noccs;d++){
 					if(l % (Noccs+1)!=d+1 && l % (Noccs+1)>0){
 						// the loss is from when they were a stayer to now... actually using current stayers
-						double ylossld = log(gsl_matrix_get(wld,l%(Noccs+1),l%(Noccs+1)-1)/gsl_matrix_get(wld,l,d));
+						//double wlast = gsl_matrix_get(wld,l%(Noccs+1),l%(Noccs+1)-1);
+						//double wnext = gsl_matrix_get(wld,l,d);
+						double wlast = wldFE[l%(Noccs+1)][l%(Noccs+1)-1];
+						double wnext = wldFE[l][d];
+						double ylossld = log(wnext/wlast);
 						// the fraction doing it
 						double wgt_here = pld[l][d]*gsl_matrix_get(sol->ald,l,d);
 						if(gsl_finite(ylossld) && wgt_here>1e-5 && gsl_finite(wgt_here)){
@@ -3325,7 +3357,9 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 			Xrow0 = Xrow;
 		}
 
-
+		for(l=0;l<Nl;l++)
+			free(wldFE[l]);
+		free(wldFE);
 		/*if(printlev>=2){
 		// compute wages in  this period
 			gsl_vector * Es = gsl_vector_calloc(Ns);
@@ -3363,16 +3397,15 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 		gsl_matrix_memcpy(x,xp);
 	}// for d<Ndraw
 
-	if((st->cal_set<=0 || st->cal_set==2)&& d_chng>1e-4) {
+	if((st->cal_set<=0 || st->cal_set==2) ) {
 		gsl_vector_view y_v = gsl_vector_subvector(yloss, 0, Xrow);
 		gsl_matrix_view X_v = gsl_matrix_submatrix(XX, 0, 0, Xrow, XX->size2);
-		if (printlev >= 4) {
+		if (printlev >= 2) {
 			printmat("XXloss.csv", &X_v.matrix);
-			printmat("Wt.csv", &W_v.matrix);
 			printvec("yloss.csv", &y_v.vector);
 		}
 
-		status += OLS(&y_v.vector, &X_v.matrix, &W_v.matrix, coefs, er);
+		status += OLS(&y_v.vector, &X_v.matrix, coefs, er);
 
 	}
 
@@ -6019,7 +6052,7 @@ int set_params(const double * x, int cal_set){
 			}
 		}
 		double chi_lb = 0.25;
-		double chi_ub = 0.9;
+		double chi_ub = 1.1;
 		for(l=1;l<Noccs+1;l++){
 			for(d=0;d<Noccs;d++){
 				if(l!=d+1){
