@@ -14,7 +14,8 @@
 //#define _DFBOLS_USE
 //#define _MPI_USE
 
-
+// To run, pass arguments first what to calibrate (if 0 or 4, does everything, otherwise 1,2,3 do only non HC params, only HC params or a model w/o any HC)
+// then pass coarse optimization and fine optimization algorithm selections: 0 for fine (polishing) does not polish, otherwise uses Quasi-Newton
 
 #ifdef _MKL_USE
 #include "mkl_lapacke.h"
@@ -97,7 +98,7 @@ int t_zeros = 0;
 double 	beta	= 0.9967;	// monthly discount
 double	nu 		= 0.0; 		// switching cost --- I don't need this!
 double 	fm_shr	= 0.5;	// firm's surplus share
-double 	kappa	= 0.27;//.1306; corresponds to HM number
+double 	kappa	= 0.13;//.1306; corresponds to HM number, was 0.27
 double *b; // unemployment benefit
 double 	brt		= 0.42;
 double 	bdur	= 6.0;
@@ -117,7 +118,7 @@ double 	chi_co[]= {-1.45,-1.25,-0.717312,0. };
 
 
 double rhoZ		= 0.9621;
-double rhozz	= 0.9963;
+double rhozz	= 0.1;
 
 double sig_eps	= 2.526e-05;//1.2610e-06;//0.00008557;//0.00002557;//7.2445e-7;  using mine, not FED Numbers
 double sig_zet	= 1e-5;//1.0e-6; (adjustment for the FRED number)
@@ -140,7 +141,7 @@ double med_dr	= 13;
 double chng_pr	= 0.45;
 
 double* sk_wg;
-double Zfcoef[] = {0.0233,-0.0117};
+//double Zfcoef[] = {0.0233,-0.0117};
 			// old : {-0.0028,-0.0089,0.0355,0.0083};
 
 struct aux_coef{
@@ -401,9 +402,9 @@ int main(int argc,char *argv[]){
 
 	/* Calibration Loop!
 	*/
-	double x0_0[]	= {phi	,sig_psi	,tau	,scale_s	,shape_s	,effic,	chi_co_read[0]	,chi_co_read[1]	,chi_co_read[2]	,chi_co_read[3]	};
-	double lb_0[]	= {0.25	,0.00005	,0.005	,0.035		,0.015		,0.5	,0.0			,0.0			,0.0			,-1.0};
-	double ub_0[]	= {0.6	,0.25		,0.2	,0.15		,0.20		,1.35	,1.0			,1.0			,1.0			, 0.0};
+	double x0_0[]	= {phi  ,sig_psi    ,tau    ,scale_s    ,shape_s    ,effic	,chi_co_read[0] ,chi_co_read[1]	,chi_co_read[2]	,chi_co_read[3]	};
+	double lb_0[]	= {0.25 ,0.25       ,0.001  ,0.035      ,0.015	    ,0.75   ,0.0            ,0.0            ,0.0            ,-1.0};
+	double ub_0[]	= {0.6  ,25.0       ,0.1    ,0.15	    ,0.20       ,1.35   ,1.0            ,1.0            ,1.             , 0.0};
 
 	int Ntotx = sizeof(x0_0)/sizeof(double);
 	for(i=0;i<Ntotx;i++){
@@ -501,8 +502,8 @@ int main(int argc,char *argv[]){
 
 			strcpy(calhi_f,"calhist0.log");
 			calhist = fopen(calhi_f,"a+");
-			fprintf(calhist,"phi,sig_psi,tau,effic,b1,b2,b3\n");
-			fprintf(calhist,"dist,wg,fnd,chng,elpt,b1,b2,b3\n");
+			fprintf(calhist,"phi,sig_psi,tau,effic,b1,b2,b3,b0\n");
+			fprintf(calhist,"dist,wg,fnd,chng,elpt,b1,b2,b3,b0\n");
 			fprintf(calhist,"***Beginning Calibration of param set 0***\n");
 			fclose(calhist);
 
@@ -2533,10 +2534,8 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			gsl_matrix_set(Zz_hist,di,Notz+d,gsl_matrix_get(Zz_hist,di,Notz+d)-zzmean_esti[d]-zzvar_esti[d]/2);
 	}
 
-
-
-
-	printmat("Zz_hist0.csv",Zz_hist);
+	if(printlev>=2)
+		printmat("Zz_hist0.csv",Zz_hist);
 
 	// compute the standard deviation of finding for each occupation
 	double fd_sim_sd[Noccs];
@@ -2758,56 +2757,6 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		}
 
 
-
-
-		/*Zmean_esti = 0.;
-		for(d=0;d<Noccs;d++) zzmean_esti[d] = 0.;
-		for(di=0;di<simT;di++){
-			Zmean_esti += gsl_vector_get(Zhist,di)/(double)simT;
-			for(d=0;d<Noccs;d++)
-				zzmean_esti[d] += gsl_matrix_get(zhist,di,d)/(double)simT;
-		}
-		double Zvar_esti = 0.;
-		double zzvar_esti[Noccs];
-		for(d=0;d<Noccs;d++) zzvar_esti[d] = 0.;
-		for(di=0;di<simT;di++){
-			Zvar_esti += pow(gsl_vector_get(Zhist,di) - Zmean_esti,2)/(double)simT;
-			for(d=0;d<Noccs;d++)
-				zzvar_esti[d] += pow(gsl_matrix_get(zhist,di,d)-zzvar_esti[d],2)/(double)simT;
-		}
-
-		// copy the history of implied shocks in to the feed-in shocks (with a weighting)
-		for(di=0;di<simT;di++){
-			gsl_matrix_set(Zz_hist,di,0,zmt_upd*(gsl_vector_get(Zhist,di) - Zmean_esti - Zvar_esti/2)
-										   + (1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,0));
-			for(d=0;d<Noccs;d++)
-				gsl_matrix_set(Zz_hist,di,d+Notz,zmt_upd*(gsl_matrix_get(zhist,di,d) - zzmean_esti[d] - zzvar_esti[d]/2)
-												 +(1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,d+Notz));
-		}
-		*/
-
-		// a few summary stats just to see:
-		if(printlev>=2){
-			double pd_sim_mean[Noccs];
-			double pd_sim_sd[Noccs];
-			for(d=0;d<Noccs;d++){
-				fd_sim_sd[d] = 0;
-				fd_sim_mean[d] = 0.;
-				for(di=0;di<simT;di++) fd_sim_mean[d] += gsl_matrix_get(fnd_d_hist,di,d)/(double)simT;
-				for(di=0;di<simT;di++) fd_sim_sd[d] += pow(gsl_matrix_get(fnd_d_hist,di,d) -fd_sim_mean[d],2)/(double)simT;
-				fd_sim_sd[d] = pow(fd_sim_sd[d],0.5);
-				// difference in standard deviation:
-				fd_datsim_sd[d] = fd_sim_sd[d]/fd_dat_sd[d];
-				pd_sim_sd[d] = 0;
-				pd_sim_mean[d] = 0.;
-				for(di=0;di<simT;di++) pd_sim_mean[d] += pd_hist[di][d]/(double)simT;
-				for(di=0;di<simT;di++) pd_sim_sd[d] += pow(pd_hist[di][d] -pd_sim_mean[d],2)/(double)simT;
-				pd_sim_sd[d] = pow(pd_sim_sd[d],0.5);
-			}
-		}
-
-
-
 		// now have to estimate the process given zhist (idiosync prod) and Zhist (ag prod)
 		// Estimate on new data and update!!
 		status += est_fac_pro(zhist,Zhist,&mats1);
@@ -2844,8 +2793,8 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 		double zdist_i = 0.0;
 		gsl_matrix_sub(zhist0,zhist);
-		//if(estiter % 2 == 0)
-		if(printlev>=4 || status >0 || estiter%50 ==0 ){
+
+		if(printlev>=4 || (status >0 && printlev>=2) || (estiter%50 ==0 && printlev>=2) ){
 			printf("rhozz, rhoZ,s_urt,e^Z, status = %f,%f,%f,%f,%d \n",mats0->rhozz,mats0->rhoZ,s_urt,exp(Zmean_esti),status);
 			printmat("zhist_in.csv",zhist);
 			printmat("xd_hist.csv",xd_hist);
@@ -2857,6 +2806,26 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			}
 			printmat("LambdaSol.csv",mats1.Lambda);
 			printmat("var_zetaSol.csv",mats1.var_zeta);
+
+			double pd_sim_mean[Noccs];
+			double pd_sim_sd[Noccs];
+			for(d=0;d<Noccs;d++){
+				fd_sim_sd[d] = 0;
+				fd_sim_mean[d] = 0.;
+				for(di=0;di<simT;di++) fd_sim_mean[d] += gsl_matrix_get(fnd_d_hist,di,d)/(double)simT;
+				for(di=0;di<simT;di++) fd_sim_sd[d] += pow(gsl_matrix_get(fnd_d_hist,di,d) -fd_sim_mean[d],2)/(double)simT;
+				fd_sim_sd[d] = pow(fd_sim_sd[d],0.5);
+				// difference in standard deviation:
+				fd_datsim_sd[d] = fd_sim_sd[d]/fd_dat_sd[d];
+				pd_sim_sd[d] = 0;
+				pd_sim_mean[d] = 0.;
+				for(di=0;di<simT;di++) pd_sim_mean[d] += pd_hist[di][d]/(double)simT;
+				for(di=0;di<simT;di++) pd_sim_sd[d] += pow(pd_hist[di][d] -pd_sim_mean[d],2)/(double)simT;
+				pd_sim_sd[d] = pow(pd_sim_sd[d],0.5);
+			}
+			gsl_vector_view fd_datsim_sd_vec = gsl_vector_view_array(fd_datsim_sd,Noccs);
+			printvec("fd_datsim_sd.csv",&fd_datsim_sd_vec.vector);
+
 		}
 		int NTz = zhist0->size1*zhist0->size2;
 		for(d=0;d<NTz;d++)
@@ -2864,9 +2833,15 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		zdist_i = sqrt(zdist_i);
 		gsl_vector_set(zdist_hist,estiter,zdist_i);
 		double zdist_av = 0;
-		for(ll=estiter-19;ll<estiter+1;ll++) zdist_av += gsl_vector_get(zdist_hist,ll)/20.;
+		if(estiter>19)
+			for(ll=estiter-19;ll<estiter+1;ll++) zdist_av += gsl_vector_get(zdist_hist,ll)/20.;
+		else
+			zdist_av =10.;
 		double zdist_av_l = 0;
-		for(ll=estiter-39;ll<estiter-20;ll++) zdist_av_l += gsl_vector_get(zdist_hist,ll)/20.;
+		if (estiter>40)
+			for(ll=estiter-39;ll<estiter-20;ll++) zdist_av_l += gsl_vector_get(zdist_hist,ll)/20.;
+		else
+			zdist_av_l = zdist_av+10.;
 
 		if(verbose_old>1){
 			if(estiter==0) printf("stoch proc, iter: ");
@@ -2874,8 +2849,10 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		}
 
 		// converged on the right z process
-		if(zdist_i<1e-4 || (zdist_av >zdist_av_l+1e-4 && zdist_i<1e-2) )
+		if(zdist_i<1e-4 || (zdist_av >zdist_av_l+1e-4 && zdist_i<1e-2) ){
+			printf("rhozz, rhoZ,s_urt,e^Z, status = %f,%f,%f,%f,%d \n",mats0->rhozz,mats0->rhoZ,s_urt,exp(Zmean_esti),status);
 			break;
+		}
 		gsl_matrix_memcpy(zhist0,zhist);
 	}// end estiter
 	if(printlev_old>=2)
@@ -4198,7 +4175,7 @@ int fd_dat_sim(gsl_matrix * fd_hist_dat, struct shock_mats * fd_mats){
 	}
 
 
-	if(printlev >=1){
+	if(printlev >=2){
 		printmat("fd_facs.csv",fd_fac);
 		printmat("fd_hist_dat.csv",fd_hist_dat);
 		printvec("fd_ag.csv",fd_ag);
@@ -5312,7 +5289,7 @@ int alloc_econ(struct st_wr * st){
 	gsl_matrix_set((st->sim)->moment_weights,0,5,1.0);
 	for(i=0;i<Nskill-1;i++)
 		gsl_matrix_set((st->sim)->moment_weights,1,i,1.0);
-	gsl_matrix_set((st->sim)->moment_weights,1,Nskill-1,1.0);
+	gsl_matrix_set((st->sim)->moment_weights,1,Nskill-1,2.0);
 
 
 
@@ -6189,6 +6166,16 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 
 	int param_offset = st->cal_set == 1 || st->cal_set == 0 ? ((st->sim)->data_moments)->size2 : 0;
 
+
+	if(printlev>=1){
+		// print where I am searching
+		calhist = fopen(calhi_f,"a+");
+		for(i=0;i<n;i++)
+			fprintf(calhist,"%f,",x[i]);
+		fprintf(calhist,"\n");
+		fclose(calhist);
+	}
+
 	status 	= sol_ss(ss,NULL,xss,sol);
 	if(printlev>=0 && status>=1) printf("Steady state not solved \n");
 	status += sys_def(ss,sys,mats0);
@@ -6240,10 +6227,8 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 		st->cal_best = dist;
 
 	if(printlev>=1){
+		// print the result of what I found here
 		calhist = fopen(calhi_f,"a+");
-		for(i=0;i<n;i++)
-			fprintf(calhist,"%f,",x[i]);
-		fprintf(calhist,"\n");
 		fprintf(calhist,"%f,",dist);
 		if(st->cal_set!=2){
 			for(i=0;i<(simdat->data_moments)->size2;i++)
@@ -6256,7 +6241,6 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 		fprintf(calhist,"\n");
 		fclose(calhist);
 	}
-
 
 	for(i=5;i>0;i--)
 		shist[i] = shist[i-1];
