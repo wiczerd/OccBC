@@ -1222,16 +1222,16 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 					double post = gsl_matrix_get(pld,l,d)>0? - kappa*thetald->data[l*Noccs+d]/gsl_matrix_get(pld,l+ll*(Noccs+1),d) : 0.0;
 					double ret 	= chi[l][d]*exp(zd) - nud
 							+ beta*gsl_vector_get(W_ld,l*Noccs+d)
-							- bl*(1.0-(double)ll) - (double)ll*privn - beta*((1.0-1.0/bdur)*W_l0->data[l + ll*(Noccs+1)] + 1.0/bdur*W_l0->data[l+Noccs+1]);
+							- bl*(1.0-(double)ll) - (double)ll*privn - beta*((1.0-1.0/bdur)*gsl_vector_get(W_l0,l+ll*(Noccs+1)) + 1.0/bdur*gsl_vector_get(W_l0,l+Noccs+1));
 					ret 	*= (1.0-fm_shr);
-					ret 	+= (bl*(1.0-(double)ll) + ((double)ll)*privn  + beta*(1.0-1.0/bdur)*W_l0->data[l+ ll*(Noccs+1)] + beta*1.0/bdur*W_l0->data[l+Noccs+1]);
+					ret 	+= (bl*(1.0-(double)ll) + ((double)ll)*privn  + beta*(1.0-1.0/bdur)*gsl_vector_get(W_l0,l+ ll*(Noccs+1)) + beta*1.0/bdur*gsl_vector_get(W_l0,l+Noccs+1));
 					W_0 	+= gld->data[ll*JJ1+l*Noccs+d]*gsl_matrix_get(pld,l+ll*(Noccs+1),d)*ret;
 				}// d=0:Noccs
 
 				W_0 	+= (1.0-findrt_ld)*(bl*(1.0-(double)ll) +privn*((double)ll)
-						+ beta*((1.0-1.0/bdur)*W_l0->data[l+ll*(Noccs+1)] + 1.0/bdur*W_l0->data[l+Noccs+1]));
+						+ beta*((1.0-1.0/bdur)*gsl_vector_get(W_l0,l+ll*(Noccs+1)) + 1.0/bdur*gsl_vector_get(W_l0,l+Noccs+1)));
 				double distW0 = fabs(W_l0->data[l+ll*(Noccs+1)] - W_0)/W_l0->data[l];
-				W_l0->data[l+ll*(Noccs+1)] = W_0;
+				gsl_vector_set(W_l0,l+ll*(Noccs+1),W_0);
 
 				if(distW0 > maxdistW0)
 					maxdistW0 = distW0;
@@ -1246,10 +1246,12 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 		
 		for(l=0;l<Noccs+1;l++){
 			for(ll=0;ll<2;ll++){
-				double distW = fabs(lW_l0->data[l*Noccs + ll*(Noccs+1)] - W_l0->data[l*Noccs + ll*(Noccs+1)])/(1.0+lW_l0->data[l*Noccs + ll*(Noccs+1)]);
+				double distW = fabs(gsl_vector_get(lW_l0,l*Noccs + ll*(Noccs+1)) - gsl_vector_get(W_l0,l*Noccs + ll*(Noccs+1)) )
+							   /(1.0+gsl_vector_get(lW_l0,l*Noccs + ll*(Noccs+1)));
 				maxdistW = distW>maxdistg ? distW : maxdistW;
 				for(d=0;d<Noccs;d++){
-					double distg = fabs(lgld->data[l*Noccs+d + ll*JJ1] - gld->data[l*Noccs+d + ll*JJ1])/(1.0+lgld->data[l*Noccs+d + ll*JJ1]);
+					double distg = fabs(gsl_vector_get(lgld,l*Noccs+d + ll*JJ1) - gsl_vector_get(gld,l*Noccs+d + ll*JJ1))
+								   /(1.0+gsl_vector_get(lgld,l*Noccs+d + ll*JJ1));
 					maxdistg = distg>maxdistg ? distg : maxdistg;
 					adistg += distg*distg;
 				}
@@ -2756,11 +2758,20 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 		// copy the history of implied shocks in to the feed-in shocks (with a weighting)
 		for(di=0;di<simT;di++){
-			gsl_matrix_set(Zz_hist,di,0,zmt_upd*gsl_vector_get(Zhist,di)
-										+ (1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,0));
-			for(d=0;d<Noccs;d++)
-				gsl_matrix_set(Zz_hist,di,d+Notz,zmt_upd*gsl_matrix_get(zhist,di,d)
+			if(gsl_finite(gsl_vector_get(Zhist,di))==1)
+				gsl_matrix_set(Zz_hist,di,0,zmt_upd*gsl_vector_get(Zhist,di)
+											+ (1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,0));
+			else
+				gsl_matrix_set(Zz_hist,di,0,gsl_matrix_get(Zz_hist,di,0));
+
+			for(d=0;d<Noccs;d++){
+				if(gsl_finite(gsl_matrix_get(zhist,di,d))==1)
+					gsl_matrix_set(Zz_hist,di,d+Notz,zmt_upd*gsl_matrix_get(zhist,di,d)
 												 +(1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,d+Notz));
+				else
+					gsl_matrix_set(Zz_hist,di,d+Notz,gsl_matrix_get(Zz_hist,di,d+Notz));
+			}
+
 		}
 		// re-norm so that the mean of e(z) is always 1:
 		Zmean_esti = 0.;
@@ -2822,7 +2833,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		double zdist_i = 0.0;
 		gsl_matrix_sub(zhist0,zhist);
 
-		if(printlev>=4 || (status >0 && printlev>=2) || (estiter%50 ==0 && printlev>=2) ){
+		if(printlev>=4 || (status >0 && printlev>=2) || (estiter%10 ==0 && printlev_old>=2) ){
 			printf("rhozz, rhoZ,s_urt,e^Z, status = %f,%f,%f,%f,%d \n",mats0->rhozz,mats0->rhoZ,s_urt,exp(Zmean_esti),status);
 			printmat("zhist_in.csv",zhist);
 			printmat("xd_hist.csv",xd_hist);
@@ -2883,8 +2894,10 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		}
 		gsl_matrix_memcpy(zhist0,zhist);
 	}// end estiter
-	if(printlev_old>=2)
-		printvec("zdist_hist.csv",zdist_hist);
+	if(printlev_old>=2) {
+		printvec("zdist_hist.csv", zdist_hist);
+		printmat("Zz_hist.csv", Zz_hist);
+	}
 	if(verbose_old>1)
 		printf("\n");
 	verbose 	= verbose_old;
@@ -4703,23 +4716,28 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 			double zdhere =0;
 			double zdmin = log(b[1]); // can't be so low that no exerpienced worker would want to be there
 			double zdmin0 = zdmin;
-			double zdmax = -zdmin0; // this is ad hoc
+			double zdmax = -zdmin0*1.5; // this is ad hoc
 			double zdmax0 = zdmax;
-			// check bounds and otherwise bring them in:
+			/* check bounds and otherwise bring them in:
 			double residhere_min = zsol_resid(zdmin,(void*)&zp);
 			if(residhere_min > fd_dat[d])
 				zdmin = 0.5*(zdmin0+zdhere);
 			double residhere_max = zsol_resid(zdmax,(void*)&zp);
 			if(residhere_max > fd_dat[d])
 				zdmax = 0.5*(zdmax0+zdhere);
-			residhere_min = zsol_resid(zdmin,(void*)&zp);
-			residhere_max = zsol_resid(zdmax,(void*)&zp);
+			*/
+			double residhere_min = zsol_resid(zdmin,(void*)&zp);
+			double residhere_max = zsol_resid(zdmax,(void*)&zp);
 			if(residhere_min*residhere_max<0.) // straddle zero
 				zdhere = zero_brent(zdmin,zdmax,zdhere,(void*)&zp,&zsol_resid);
-			else if( fabs(residhere_min)>fabs(residhere_max) )
+			else if( fabs(residhere_min)>fabs(residhere_max) ){
 				zdhere = zdmax;
-			else
+				status ++;
+			}
+			else{
 				zdhere = zdmin;
+				status ++;
+			}
 			/*gsl_root_fsolver_set(zsolver,&F,zdmin,zdmax);
 			int zditer = 0;
 			int zdstatus;
@@ -4735,11 +4753,11 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 					break;
 
 			}while(zdstatus ==GSL_CONTINUE && zditer<100);
-			*/
 			double residhere = zsol_resid(zdhere,(void*)&zp);
 			if(zdmin<= zdmin0 || zdmax >= zdmax0 || residhere  > fd_dat[d]){
 				status ++;
 			}
+			*/
 			zz_fd[d] = zdhere;
 			meanzd += zdhere/(double)Noccs;
 			gsl_root_fsolver_free(zsolver);
