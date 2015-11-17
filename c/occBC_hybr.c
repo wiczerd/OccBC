@@ -9,6 +9,7 @@
 *
 * old compile line: icc /home/david/Documents/CurrResearch/OccBC/program/c/occBC_hybr.c -static -lgsl -openmp -mkl=parallel -O3 -lnlopt -I/home/david/Computation -I/home/david/Computation/gsl/gsl-1.15 -o occBC_hybr.out
 * new compile line:  icc  occBC_hybr.c -mkl -openmp -lgsl -D_MKL_USE=1 -D_DFBOLS_USE=0 -g -o occBC_hybr.out
+* valgrind line: valgrind --leak-check=yes --log-file=occBC_valgrind.log --error-limit=no ./occBC_hybr.out
 */
 //#define _MKL_USE // this changes LAPACK options to use faster MKL versions of LAPACK
 //#define _DFBOLS_USE
@@ -58,6 +59,7 @@ int rescale_var	= 0;
 int check_fin	= 0;
 int homosk_psi	= 1;
 int sym_occs	= 0;
+int dbg_iters	= 0; // limits iterations for debugging purposes
 int use_anal	= 1; // this governs whether the perturbation uses analytic derivatives
 int fix_fac		= 0; // this allows f_t to be free when estimating.  o.w. the path of f_t, gamma and var_eta are fixed.
 int opt_alg		= 3; // 10x => Nelder-Meade, 5x => Subplex, 3x => DFBOLS, o.w => BOBYQA
@@ -114,7 +116,7 @@ double 	tau 	= 0.041851;
 double 	scale_s	= 0.026889;
 double 	shape_s	= 0.194987;
 double 	effic	= 0.495975;
-double 	chi_co[]= {-1.45,-1.25,-0.717312,0. };
+double 	chi_co[]= {1.45,1.25,0.717312,-0.2 };
 
 
 double rhoZ		= 0.9621;
@@ -200,7 +202,11 @@ struct shock_mats{
 	gsl_vector * ag;
 	gsl_matrix * Zz_hist;
 };
-
+struct zsol_params{
+	double *fd_xg_surp;
+	int d;
+	gsl_matrix * PP;
+};
 
 struct st_wr * g_st;
 struct shock_mats * fd_mats;
@@ -299,7 +305,8 @@ int main(int argc,char *argv[]){
 
 	if(printlev>=2)	printmat("Readf_skills.csv" ,f_skills);
 	FILE * readparams = fopen("params_in.csv","r+");
-	fscanf(readparams,"%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",&phi,&sig_psi,&tau,&scale_s,&shape_s,&effic,&chi_co[0],&chi_co[1],&chi_co[2]);
+	fscanf(readparams,"%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
+		   &phi,&sig_psi,&tau,&scale_s,&shape_s,&effic,&chi_co[0],&chi_co[1],&chi_co[2],&chi_co[3]);
 	fclose(readparams);
 	printf("%f,%f,%f,%f,%f,%f",phi,sig_psi,tau,scale_s,shape_s,effic);
 
@@ -315,9 +322,10 @@ int main(int argc,char *argv[]){
 	fscanf(readchi,"%lf,%lf,%lf,%lf",&chi_co_read[0],&chi_co_read[1],&chi_co_read[2],&chi_co_read[3]);
 	fclose(readchi);
 
+	// sk_wg are the targets
 	for(l=0;l<Nskill;l++) sk_wg[l] = chi_co_read[l];
 
-	set_params(chi_co_read, 2);
+	set_params(chi_co, 2);
 	if(fabs(calflag)==3){
 		double x3[] = {phi,scale_s,shape_s,effic};
 		set_params(x3,3);
@@ -402,9 +410,9 @@ int main(int argc,char *argv[]){
 
 	/* Calibration Loop!
 	*/
-	double x0_0[]	= {phi  ,sig_psi    ,tau    ,scale_s    ,shape_s    ,effic	,chi_co_read[0] ,chi_co_read[1]	,chi_co_read[2]	,chi_co_read[3]	};
-	double lb_0[]	= {0.25 ,0.25       ,0.001  ,0.035      ,0.015	    ,0.75   ,0.0            ,0.0            ,0.0            ,-1.0};
-	double ub_0[]	= {0.6  ,25.0       ,0.1    ,0.15	    ,0.20       ,1.35   ,1.0            ,1.0            ,1.             , 0.0};
+	double x0_0[]	= {phi  ,sig_psi    ,tau    ,scale_s    ,shape_s ,effic	,chi_co[0] ,chi_co[1] ,chi_co[2] ,chi_co[3]	};
+	double lb_0[]	= {0.25 ,0.25       ,0.001  ,0.035      ,0.015	 ,0.75   ,0.0       ,0.0      ,0.0      ,-1.0};
+	double ub_0[]	= {0.6  ,25.0       ,0.1    ,0.15	    ,0.20    ,1.35   ,1.0       ,1.0      ,1.       , 0.0};
 
 	int Ntotx = sizeof(x0_0)/sizeof(double);
 	for(i=0;i<Ntotx;i++){
@@ -424,7 +432,7 @@ int main(int argc,char *argv[]){
 		int verbose_old	= verbose;
 		printlev =1;
 		verbose = 1;
-		int param_off = 6;
+		int param_off = 6; // the number of non-wage regression parameters
 		double cal_xtol = 1e-9;
 		double cal_ftol = 1e-8;
 		if(calflag==1||calflag ==0){
@@ -567,7 +575,7 @@ int main(int argc,char *argv[]){
 
 	alloc_econ(st);
 
-	status += sol_ss(st->ss,NULL,st->xss,st->sol);
+	status += sol_ss(st->ss,0,st->xss,st->sol);
 	if(verbose>=1 && status ==0) printf("Successfully computed the steady state\n");
 	if(verbose>=0 && status ==1) printf("Broke while computing steady state\n");
 	status += sys_def(st->ss,st->sys,st->mats);
@@ -867,6 +875,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 
 	int status,l,d,dd,ll,iter,itermax,itermin,i,allocZz, JJ1;
 	itermax = 2500;
+	if(dbg_iters ==1) itermax =100;
 	itermin = 100;
 	gsl_vector 	* W_l0,*W_ld, *lW_l0;
 	gsl_vector 	* Uw_ld;
@@ -874,7 +883,7 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 	gsl_matrix 	* m_distg; //max dist g, ave dist g, max dist W0
 	gsl_matrix 	* pld,*x;//,*lx;
 
-	if(Zz == NULL){
+	if(Zz == 0 || Zz == NULL){
 		Zz = gsl_vector_calloc(Nx);
 		allocZz = 1;
 	}
@@ -1066,27 +1075,45 @@ int sol_ss(gsl_vector * ss, gsl_vector * Zz, gsl_matrix * xss, struct sys_sol * 
 				}
 
 				double sexpret_dd = 0.0;
-				gsl_function gprob;
-				gprob.function = &hetero_ev;
-				gprob.params = R_dP_ld;
-				for (d = 0; d < Noccs; d++) { // choice probabilities
-					if (R_dP_ld[d + 1] > 0. && gsl_matrix_get(pld, l + ll * (Noccs + 1), d) > 0.) {
-						R_dP_ld[0] = (double) d;
-						double gg, ggerr;
-						#pragma omp critical
-						{
-						//	gsl_integration_qags(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
-							size_t neval;
-							gsl_integration_qng(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, &gg, &ggerr,&neval);
+				if(homosk_psi != 1){
+					gsl_function gprob;
+					gprob.function = &hetero_ev;
+					gprob.params = R_dP_ld;
+					for (d = 0; d < Noccs; d++) { // choice probabilities
+						if (R_dP_ld[d + 1] > 0. && gsl_matrix_get(pld, l + ll * (Noccs + 1), d) > 0.) {
+							R_dP_ld[0] = (double) d;
+							double gg, ggerr;
+							#pragma omp critical
+							{
+								//	gsl_integration_qags(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, 1000, integw, &gg, &ggerr);
+								size_t neval;
+								gsl_integration_qng(&gprob, 1.e-5, 20, 1.e-5, 1.e-5, &gg, &ggerr,&neval);
+							}
+							sexpret_dd += gg;
+							gsl_vector_set(gld, l * Noccs + d + ll * JJ1, gg);
 						}
-						sexpret_dd += gg;
-						gsl_vector_set(gld, l * Noccs + d + ll * JJ1, gg);
+						else
+							gsl_vector_set(gld, l * Noccs + d + ll * JJ1, 0.);
 					}
-					else
-						gsl_vector_set(gld, l * Noccs + d + ll * JJ1, 0.);
-				}
+				}else{
+					// total choice probability
+					double gdenom =0;
+					for(dd=0;dd<Noccs;dd++) {
+						if (R_dP_ld[dd + 1] > 0. && gsl_matrix_get(pld, l + ll * (Noccs + 1), dd) > 0.)
+							gdenom += exp(R_dP_ld[dd + 1]);
+					}
 
-				for(d=0;d<Noccs;d++){ 
+					double gg;
+					for(d=0;d<Noccs;d++){
+						if (R_dP_ld[d + 1] > 0. && gsl_matrix_get(pld, l + ll * (Noccs + 1), d) > 0.) {
+							gg = exp(R_dP_ld[d + 1]) / gdenom;
+							sexpret_dd += gg;
+							gsl_vector_set(gld, l * Noccs + d + ll * JJ1, gg);
+						}else
+							gsl_vector_set(gld, l * Noccs + d + ll * JJ1, 0.);
+					}
+				}
+				for(d=0;d<Noccs;d++){
 					double g_updaterate = 1.0;
 					// convex combination between gld and lgld
 					gsl_vector_set(gld, l*Noccs+d+ll*JJ1,
@@ -1632,7 +1659,7 @@ int sys_ex_set(gsl_matrix * N, gsl_matrix * S,struct shock_mats * mats){
 	N1 		= gsl_matrix_calloc(Nvarex,Nvarex);
 	gsl_matrix_set_identity(N0);
 	//gsl_matrix_set_zero(N1);
-	//gsl_matrix_set_identity(invN0);
+	//gsl_matrix_set_zero(invN0);
 
 
 	//partitions of Lambda:
@@ -2451,7 +2478,8 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 	struct aux_coef * simdat = st->sim;
 	int init_T = 200, l,d,ll;
 	int Nl = 2*(Noccs+1);
-	int di,estiter,status =0,maxestiter=200;
+	int di,estiter,status =0,maxestiter=500;
+	if(dbg_iters == 1) maxestiter = 20;
 	double ** pld	= malloc(sizeof(double*)*Nl);
 	for(l = 0;l<Nl;l++)
 		pld[l] = malloc(sizeof(double)*Noccs);
@@ -4545,11 +4573,7 @@ int theta(gsl_matrix * tld, const gsl_vector * ss, const struct sys_coef * sys, 
 	return status;
 }
 
-struct zsol_params{
-	double *fd_xg_surp;
-	int d;
-	gsl_matrix * PP;
-};
+
 double zsol_resid(double zdhere, void *params){
 	double  resid;
 	struct zsol_params * zp =(struct zsol_params *) params;
@@ -4604,7 +4628,7 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 		pld_dat[l] = malloc(sizeof(double)*Noccs);
 	double fd_sim[Noccs],meanzd;
 	gsl_vector * Es = gsl_vector_calloc(Ns);
-
+	struct zsol_params zp;
 	status = 0;
 
 	ss_Wl0_i	= 0;
@@ -4641,9 +4665,6 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 		status += Es_cal(Es, &ss_W.vector, sol->PP, Zz_here);
 
 		for(d=0;d<Noccs;d++){
-			gsl_function F;
-			F.function = &zsol_resid;
-			gsl_root_fsolver *zsolver = gsl_root_fsolver_alloc(gsl_root_fsolver_brent);
 
 			double fd_xg_surp[1+2*Nl];
 			// the fd part
@@ -4670,9 +4691,13 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 					fd_xg_surp[1+Nl+ll*(Noccs+1)+l] = surp_minprod;
 				}// end for ll=0:1
 			}
-			struct zsol_params zp;
+
 			zp.fd_xg_surp = malloc(sizeof(double)*(2*Nl+1));
 			for(l=0;l<1+2*Nl;l++) zp.fd_xg_surp[l] = fd_xg_surp[l];
+			gsl_function F;
+			F.function = &zsol_resid;
+			gsl_root_fsolver *zsolver = gsl_root_fsolver_alloc(gsl_root_fsolver_brent);
+
 			zp.d = d;
 			F.params = &zp;
 			double zdhere =0;
@@ -4680,7 +4705,22 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 			double zdmin0 = zdmin;
 			double zdmax = -zdmin0; // this is ad hoc
 			double zdmax0 = zdmax;
-			gsl_root_fsolver_set(zsolver,&F,zdmin,zdmax);
+			// check bounds and otherwise bring them in:
+			double residhere_min = zsol_resid(zdmin,(void*)&zp);
+			if(residhere_min > fd_dat[d])
+				zdmin = 0.5*(zdmin0+zdhere);
+			double residhere_max = zsol_resid(zdmax,(void*)&zp);
+			if(residhere_max > fd_dat[d])
+				zdmax = 0.5*(zdmax0+zdhere);
+			residhere_min = zsol_resid(zdmin,(void*)&zp);
+			residhere_max = zsol_resid(zdmax,(void*)&zp);
+			if(residhere_min*residhere_max<0.) // straddle zero
+				zdhere = zero_brent(zdmin,zdmax,zdhere,(void*)&zp,&zsol_resid);
+			else if( fabs(residhere_min)>fabs(residhere_max) )
+				zdhere = zdmax;
+			else
+				zdhere = zdmin;
+			/*gsl_root_fsolver_set(zsolver,&F,zdmin,zdmax);
 			int zditer = 0;
 			int zdstatus;
 			do{
@@ -4689,16 +4729,16 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 				zdhere = gsl_root_fsolver_root(zsolver);
 				zdmin = gsl_root_fsolver_x_lower (zsolver);
 				zdmax = gsl_root_fsolver_x_upper (zsolver);
-				zdstatus = gsl_root_test_interval(zdmin,zdmax,1e-5,1e-5);
+				double tol0 = 1e-5;
+				zdstatus = gsl_root_test_interval(zdmin,zdmax,tol0 ,tol0 );
 				if(zdstatus == GSL_SUCCESS)
 					break;
 
 			}while(zdstatus ==GSL_CONTINUE && zditer<100);
-			if(zdmin<= zdmin0 || zdmax >= zdmax0){
+			*/
+			double residhere = zsol_resid(zdhere,(void*)&zp);
+			if(zdmin<= zdmin0 || zdmax >= zdmax0 || residhere  > fd_dat[d]){
 				status ++;
-				//		zdhere = zdmin>0 ? zdmax : zdmin; //did it converge to the top or bottom bound?
-				//	}else{
-				//		zdhere = 0.5*(zdmin+zdmax); //they're so close, just take the midpoint, off by 5e-6 at most
 			}
 			zz_fd[d] = zdhere;
 			meanzd += zdhere/(double)Noccs;
@@ -4717,7 +4757,7 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 
 				gsl_rng * rnghere = gsl_rng_alloc(gsl_rng_default);
 				time_t timenow;
-				timenow = time(NULL);
+				time(&timenow);
 				seedt = clock() - seedt;
 				seed  = (int) seedt + (int) timenow;
 				gsl_rng_set (rnghere, seed);
@@ -6135,7 +6175,7 @@ int set_params(const double * x, int cal_set){
 		}
 	}
 
-	if(printlev>=2){
+	if(printlev>=1){
 		gsl_matrix * cm = gsl_matrix_calloc(Noccs+1,Noccs);
 	//	gsl_matrix_view chimat = gsl_matrix_view_array(chi,Noccs+1,Noccs); why doesn't this work?
 		for(l=0;l<Noccs+1;l++){
@@ -6175,13 +6215,14 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 		fprintf(calhist,"\n");
 		fclose(calhist);
 	}
-
-	status 	= sol_ss(ss,NULL,xss,sol);
-	if(printlev>=0 && status>=1) printf("Steady state not solved \n");
+	//printlev = 3;
+	//verbose = 3;
+	status 	= sol_ss(ss,0,xss,sol);
+	if(printlev>=0 && status!=0) printf("Steady state not solved \n");
 	status += sys_def(ss,sys,mats0);
-	if(printlev>=0 && status>=1) printf("System not defined\n");
+	if(printlev>=0 && status!=0) printf("System not defined\n");
 	status += sol_dyn(ss,sol,sys,0);
-	if(printlev>=0 && status>=1) printf("System not solved\n");
+	if(printlev>=0 && status!=0) printf("System not solved\n");
 
 	if(status == 0){
 		status += sol_zproc(st,ss,xss,mats0);
@@ -6231,7 +6272,7 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 		calhist = fopen(calhi_f,"a+");
 		fprintf(calhist,"%f,",dist);
 		if(st->cal_set!=2){
-			for(i=0;i<(simdat->data_moments)->size2;i++)
+			for(i=0;i<n;i++)
 				fprintf(calhist,"%f,",(simdat->data_moments)->data[i]);
 		}
 		if(st->cal_set!=1 && st->cal_set !=3){
