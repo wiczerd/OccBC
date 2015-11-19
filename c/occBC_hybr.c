@@ -343,7 +343,7 @@ int main(int argc,char *argv[]){
 	status += readmat("Lambda_fd.csv",fd_mats->Lambda);
 	status += readmat("var_eta_fd.csv",fd_mats->var_eta);
 	status += readmat("var_zeta_fd.csv",fd_mats->var_zeta);
-	FILE * readfdparams = fopen("params_in_fd.csv","r+");
+	FILE * readfdparams = fopen("coefs_in_fd.csv","r+");
 	fscanf(readfdparams, "%lf,%lf,%lf",&fd_mats->rhoZ,&fd_mats->rhozz,&fd_mats->sig_eps2);
 	fclose(readfdparams);
 
@@ -596,9 +596,10 @@ int main(int argc,char *argv[]){
 	if(status ==0)
 		status += sim_moments(st,st->ss,st->xss);
 	if(verbose>=1 && status ==0){
-
 		printf ("It took %d clicks (%f seconds).\n",t,((float)t)/CLOCKS_PER_SEC);
 	}
+
+	// try out some parameter values for the wage regression
 
 	/*/	TGR experiment
 
@@ -607,6 +608,85 @@ int main(int argc,char *argv[]){
 	*/
 
 	status += free_econ(st);
+
+	if(calflag==-2){
+		FILE * f_startx, *f_startf;
+
+		// try out some parameter values for the wage regression
+		int Ntestpts = 4;
+		int ii,iii,iiii;
+		ii = pow(Ntestpts,Nskill);
+		double testpts[ii][Nskill];
+
+		for(i=0;i<Ntestpts;i++){
+			for(ii=0;ii<Ntestpts;ii++){
+				for(iii=0;iii<Ntestpts;iii++){
+					for(iiii=0;iiii<Ntestpts;iiii++){
+						d = i*pow(Ntestpts,3)+ ii*pow(Ntestpts,2) + iii*Ntestpts + iiii;
+						testpts[d][0]
+								= (double)(i/Ntestpts)*   (ub_0[6]  -lb_0[6])   + lb_0[6];
+						testpts[d][1]
+								= (double)(ii/Ntestpts)*  (ub_0[6+1]-lb_0[6+1]) + lb_0[6+1];
+						testpts[d][2]
+								= (double)(iii/Ntestpts)* (ub_0[6+2]-lb_0[6+2]) + lb_0[6+2];
+						testpts[d][3]
+								= (double)(iiii/Ntestpts)*(ub_0[6+3]-lb_0[6+3]) + lb_0[6+3];
+
+						set_params(testpts[d],2);
+
+						alloc_econ(st);
+
+						status += sol_ss(st->ss,0,st->xss,st->sol);
+						if(verbose>=1 && status ==0) printf("Successfully computed the steady state\n");
+						if(verbose>=0 && status ==1) printf("Broke while computing steady state\n");
+						status += sys_def(st->ss,st->sys,st->mats);
+						if(verbose>=1 && status >=1) printf("System not defined\n");
+						if(verbose>=0 && status ==0) printf("System successfully defined\n");
+
+						if(verbose>=2) printf("Now defining the 1st order solution to the dynamic model\n");
+
+						int t;
+						if(verbose>=1) t = clock();
+						status += sol_dyn(st->ss, st->sol,st->sys,0);
+						if(verbose>=0 && status >=1) printf("System not solved\n");
+						if(verbose>=0 && status ==0) printf("System successfully solved\n");
+						// update and solve the stochastic process
+						status += sol_zproc(st, st->ss, st->xss,st->mats);
+
+						if(status ==0)
+							status += sim_moments(st,st->ss,st->xss);
+
+
+
+						f_startx = fopen("testpts_chi_x.txt","a+");
+						f_startf = fopen("testpts_chi_f.txt","a+");
+
+						for(l=0;l<Nskill;l++)
+							fprintf(f_startx,"%f,",testpts[d][l]);
+						fprintf(f_startx,"\n");
+
+						for(l=0;l<6;l++)
+							fprintf(f_startf,"%f,", gsl_matrix_get(st->sim->data_moments,0,l));
+						for(l=0;l<Nskill;l++)
+							fprintf(f_startf,"%f,", gsl_matrix_get(st->sim->data_moments,1,l));
+
+						fprintf(f_startf,"\n");
+						fclose(f_startx);
+						fclose(f_startf);
+
+
+						status += free_econ(st);
+
+					}
+				}
+			}
+		}
+
+
+	}
+
+
+
 
 	gsl_matrix_free(GammaCoef);	gsl_matrix_free(LambdaCoef);
 	gsl_matrix_free(var_eta); gsl_matrix_free(var_zeta);
@@ -2833,7 +2913,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		double zdist_i = 0.0;
 		gsl_matrix_sub(zhist0,zhist);
 
-		if(printlev>=4 || (status >0 && printlev>=2) || (estiter%10 ==0 && printlev_old>=2) ){
+		if(printlev>=4 || (status >0 && printlev>=2) || (estiter%10 ==0 && printlev>=2) ){
 			printf("rhozz, rhoZ,s_urt,e^Z, status = %f,%f,%f,%f,%d \n",mats0->rhozz,mats0->rhoZ,s_urt,exp(Zmean_esti),status);
 			printmat("zhist_in.csv",zhist);
 			printmat("xd_hist.csv",xd_hist);
@@ -3504,10 +3584,10 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 
 
 	int fincoefs = 1;
-	for(di=0;di<coefs->size-1;di++)
+	for(di=0;di<coefs->size;di++)
 		fincoefs *= gsl_finite(gsl_vector_get(coefs,di));
 	if(fincoefs!=0){
-		for(di=0;di<coefs->size-1;di++)
+		for(di=0;di<coefs->size;di++)
 			gsl_matrix_set(simdat->data_moments,1,di,(coefs->data[di]- sk_wg[di])/fabs(sk_wg[di]));
 	}
 	else{
