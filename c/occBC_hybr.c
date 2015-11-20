@@ -59,7 +59,7 @@ int rescale_var	= 0;
 int check_fin	= 0;
 int homosk_psi	= 1;
 int sym_occs	= 0;
-int szt_gsl		= 1; // use gls brent solver, or own?
+int szt_gsl		= 0; // use gls brent solver, or own?
 int dbg_iters	= 0; // limits iterations for debugging purposes
 int use_anal	= 1; // this governs whether the perturbation uses analytic derivatives
 int fix_fac		= 0; // this allows f_t to be free when estimating.  o.w. the path of f_t, gamma and var_eta are fixed.
@@ -413,7 +413,7 @@ int main(int argc,char *argv[]){
 	*/
 	double x0_0[]	= {phi  ,sig_psi    ,tau    ,scale_s    ,shape_s ,effic	,chi_co[0] ,chi_co[1] ,chi_co[2] ,chi_co[3]	};
 	double lb_0[]	= {0.25 ,0.25       ,0.001  ,0.035      ,0.015	 ,0.75   ,0.0       ,0.0      ,0.0      ,-1.0};
-	double ub_0[]	= {0.6  ,25.0       ,0.1    ,0.15	    ,0.20    ,1.35   ,1.0       ,1.0      ,1.       , 0.0};
+	double ub_0[]	= {0.6  ,5.0       ,0.1    ,0.15	    ,0.20    ,1.5   ,1.0       ,1.0      ,1.       , 0.0};
 
 	int Ntotx = sizeof(x0_0)/sizeof(double);
 	for(i=0;i<Ntotx;i++){
