@@ -59,6 +59,7 @@ int rescale_var	= 0;
 int check_fin	= 0;
 int homosk_psi	= 1;
 int sym_occs	= 0;
+int szt_gsl		= 1; // use gls brent solver, or own?
 int dbg_iters	= 0; // limits iterations for debugging purposes
 int use_anal	= 1; // this governs whether the perturbation uses analytic derivatives
 int fix_fac		= 0; // this allows f_t to be free when estimating.  o.w. the path of f_t, gamma and var_eta are fixed.
@@ -2861,6 +2862,10 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			for(d=0;d<Noccs;d++)
 				zzmean_esti[d] += gsl_matrix_get(Zz_hist,di,d+Notz)/(double)simT;
 		}
+		for(d=0;d<Noccs;d++){
+			if(gsl_finite(zzmean_esti[d]) != 1)
+				zzmean_esti[d] = 0.;
+		}
 		double Zvar_esti = 0.;
 		double zzvar_esti[Noccs];
 		for(d=0;d<Noccs;d++) zzvar_esti[d] = 0.;
@@ -2869,6 +2874,11 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			for(d=0;d<Noccs;d++)
 				zzvar_esti[d] += pow(gsl_matrix_get(Zz_hist,di,d+Notz)-zzvar_esti[d],2)/(double)simT;
 		}
+		for(d=0;d<Noccs;d++){
+			if(gsl_finite(zzvar_esti[d]) != 1)
+				zzvar_esti[d] = 0.;
+		}
+
 		for(di=0;di<simT;di++){
 			gsl_matrix_set(Zz_hist,di,0,gsl_matrix_get(Zz_hist,di,0)-Zmean_esti-Zvar_esti/2 );
 			for(d=0;d<Noccs;d++)
@@ -2878,8 +2888,21 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 
 		// now have to estimate the process given zhist (idiosync prod) and Zhist (ag prod)
 		// Estimate on new data and update!!
-		status += est_fac_pro(zhist,Zhist,&mats1);
+		gsl_vector_view Zhist_upd = gsl_matrix_column(Zz_hist,0);
+		gsl_vector_memcpy(Zhist,&Zhist_upd.vector);
+		for(d=0;d<Noccs;d++){
+			gsl_vector_view zhist_upd = gsl_matrix_column(Zz_hist,d+Notz);
+			gsl_vector_view zhist_d = gsl_matrix_column(zhist,d);
+			gsl_vector_memcpy(&zhist_d.vector ,&zhist_upd.vector);
+		}
 		// this destroys zhist and Zhist in the process
+		status += est_fac_pro(zhist,Zhist,&mats1);
+		// make sure everything is still hunk dory
+		if(gsl_finite(mats1.rhozz)!= 1)     status++;
+		if(gsl_finite(mats1.rhoZ)!= 1)      status++;
+		if(gsl_finite(mats1.sig_eps2)!= 1)  status++;
+		status += isfinmat(mats1.var_zeta);
+
 
 		// update process matrices
 		if(status == 0){
@@ -2909,9 +2932,6 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			printmat("zhist_bad.csv",zhist);
 			printvec("Zhist_bad.csv",Zhist);
 		}
-
-		double zdist_i = 0.0;
-		gsl_matrix_sub(zhist0,zhist);
 
 		if(printlev>=4 || (status >0 && printlev>=2) || (estiter%10 ==0 && printlev>=2) ){
 			printf("rhozz, rhoZ,s_urt,e^Z, status = %f,%f,%f,%f,%d \n",mats0->rhozz,mats0->rhoZ,s_urt,exp(Zmean_esti),status);
@@ -2946,6 +2966,8 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			printvec("fd_datsim_sd.csv",&fd_datsim_sd_vec.vector);
 
 		}
+		double zdist_i = 0.0;
+		gsl_matrix_sub(zhist0,zhist);
 		int NTz = zhist0->size1*zhist0->size2;
 		for(d=0;d<NTz;d++)
 			zdist_i += pow(zhist0->data[d],2)/(double)NTz;
@@ -4808,8 +4830,30 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 			*/
 			double residhere_min = zsol_resid(zdmin,(void*)&zp);
 			double residhere_max = zsol_resid(zdmax,(void*)&zp);
-			if(residhere_min*residhere_max<0.) // straddle zero
-				zdhere = zero_brent(zdmin,zdmax,zdhere,(void*)&zp,&zsol_resid);
+			if(residhere_min*residhere_max<0.) { // straddle zero
+				if(szt_gsl == 1){
+					gsl_root_fsolver_set(zsolver, &F, zdmin, zdmax);
+					int zditer = 0;
+					int zdstatus;
+					do {
+						zditer++;
+						zdstatus = gsl_root_fsolver_iterate(zsolver);
+						zdhere = gsl_root_fsolver_root(zsolver);
+						zdmin = gsl_root_fsolver_x_lower(zsolver);
+						zdmax = gsl_root_fsolver_x_upper(zsolver);
+						double tol0 = 1e-5;
+						zdstatus = gsl_root_test_interval(zdmin, zdmax, tol0, tol0);
+						if (zdstatus == GSL_SUCCESS)
+							break;
+
+					} while (zdstatus == GSL_CONTINUE && zditer < 100);
+					double residhere = zsol_resid(zdhere, (void *) &zp);
+					if (zdmin <= zdmin0 || zdmax >= zdmax0 || residhere > fd_dat[d]) {
+						status++;
+					}
+				}else
+					zdhere = zero_brent(zdmin, zdmax, zdhere, (void *) &zp, &zsol_resid);
+			}
 			else if( fabs(residhere_min)>fabs(residhere_max) ){
 				zdhere = zdmax;
 				status ++;
@@ -4818,26 +4862,19 @@ int invtheta_z(double * zz_fd, const double * fd_dat, const gsl_vector * ss, con
 				zdhere = zdmin;
 				status ++;
 			}
-			/*gsl_root_fsolver_set(zsolver,&F,zdmin,zdmax);
-			int zditer = 0;
-			int zdstatus;
-			do{
-				zditer++;
-				zdstatus = gsl_root_fsolver_iterate(zsolver);
-				zdhere = gsl_root_fsolver_root(zsolver);
-				zdmin = gsl_root_fsolver_x_lower (zsolver);
-				zdmax = gsl_root_fsolver_x_upper (zsolver);
-				double tol0 = 1e-5;
-				zdstatus = gsl_root_test_interval(zdmin,zdmax,tol0 ,tol0 );
-				if(zdstatus == GSL_SUCCESS)
-					break;
+			// check no NaNs
+			if(gsl_finite(zdhere)!= 1){
+				if(fabs(residhere_min)>fabs(residhere_max)){
+					zdhere = zdmax;
+					status ++;
+				}else{
+					zdhere = zdmin;
+					status ++;
+				}
 
-			}while(zdstatus ==GSL_CONTINUE && zditer<100);
-			double residhere = zsol_resid(zdhere,(void*)&zp);
-			if(zdmin<= zdmin0 || zdmax >= zdmax0 || residhere  > fd_dat[d]){
-				status ++;
 			}
-			*/
+
+
 			zz_fd[d] = zdhere;
 			meanzd += zdhere/(double)Noccs;
 			gsl_root_fsolver_free(zsolver);
@@ -6301,6 +6338,8 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 	double dist;
 
 	set_params(x, st->cal_set);
+	// clear the z-process
+
 
 	int param_offset = st->cal_set == 1 || st->cal_set == 0 ? ((st->sim)->data_moments)->size2 : 0;
 
