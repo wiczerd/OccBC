@@ -56,7 +56,7 @@ int neq;
 int verbose 	= 3;
 int printlev 	= 3;
 int rescale_var	= 0;
-int check_fin	= 0;
+int check_fin	= 1;
 int homosk_psi	= 1;
 int sym_occs	= 0;
 int szt_gsl		= 0; // use gls brent solver, or own?
@@ -106,7 +106,7 @@ double *b; // unemployment benefit
 double 	brt		= 0.42;
 double 	bdur	= 6.0;
 double 	privn	= 0.18;
-double 	sbar	= 0.02;	// will endogenize this a la Cheremukhin (2011)
+double 	sbar	= 0.02333;	// will endogenize this a la Cheremukhin (2011)
 
 
 double ** chi;
@@ -135,12 +135,12 @@ gsl_matrix * LambdaZCoef;			//agg prod effect on z
 gsl_matrix * f_skills;				//skills attached to occupations
 
 // data moments that are not directly observable
-double avg_fnd	= 0.3323252;
+double avg_fnd	= 0.3229178;
 double avg_urt	= 0.06;
 double avg_wg	= 0.006;	// this is the 5 year wage growth rate: make tau fit this
 double avg_elpt	= 0.48;		// elasticity of p wrt theta, Barichon 2011 estimate
 double avg_sdsep= 0.01256;	//the average standard deviation of sld across occupations
-double med_dr	= 13;
+double med_dr	= 2.3;
 double chng_pr	= 0.45;
 
 double* sk_wg;
@@ -406,14 +406,14 @@ int main(int argc,char *argv[]){
 
 	st->cal_set = calflag;
 	st->cal_best= 10.0;
-	st->cal_worst= 0.0;
+	st->cal_worst= 10.0;
 
 
 	/* Calibration Loop!
 	*/
 	double x0_0[]	= {phi  ,sig_psi    ,tau    ,scale_s    ,shape_s ,effic	,chi_co[0] ,chi_co[1] ,chi_co[2] ,chi_co[3]	};
 	double lb_0[]	= {0.25 ,0.25       ,0.001  ,0.035      ,0.015	 ,0.75   ,0.0       ,0.0      ,0.0      ,-1.0};
-	double ub_0[]	= {0.6  ,5.0       ,0.1    ,0.15	    ,0.20    ,1.5   ,1.0       ,1.0      ,1.       , 0.0};
+	double ub_0[]	= {0.6  ,5.0       ,0.1     ,0.15	    ,0.20    ,1.75   ,1.0       ,1.0      ,1.       , 0.0};
 
 	int Ntotx = sizeof(x0_0)/sizeof(double);
 	for(i=0;i<Ntotx;i++){
@@ -728,7 +728,7 @@ int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef *sys, int sol
 
 	
 	int Ns,Nc,Nx, i, maxrecur=5000; // these might be different from the globals of the same name.... but should not be
-	int status = 0,nonfin=0;
+	int status = 0,s,nonfin=0;
 	Ns = (sys->F1)->size2;
 	Nc = (sys->F1)->size1;
 	Nx = (sys->F3)->size2;
@@ -746,6 +746,7 @@ int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef *sys, int sol
 		gsl_matrix * F0LU =gsl_matrix_calloc((sys->F0)->size1,(sys->F0)->size2);
 		gsl_matrix_memcpy(F0LU,sys->F0);
 		int * ipiv = malloc(sizeof(int)* ((sys->F0)->size2) );
+		for(s=0;s< sys->F0->size2; s++ ) ipiv[s] =0.;
 		status =LAPACKE_dgetrf(LAPACK_ROW_MAJOR, (sys->F0)->size1,(sys->F0)->size2, F0LU->data, (sys->F0)->size2,ipiv );
 		gsl_matrix_memcpy(invF0F1,sys->F1);
 		//							order	,	trans,	n row b or a	, nrhs,
@@ -825,6 +826,7 @@ int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef *sys, int sol
 
 	#ifndef _MKL_USE
 		gsl_matrix_free(invF0);
+		free(ipiv);
 	#endif
 	#ifdef _MKL_USE
 		gsl_matrix_free(F0LU);
@@ -2179,6 +2181,7 @@ int sys_co_diff(gsl_vector * ss, gsl_matrix * Dst, gsl_matrix * Dco, gsl_matrix*
 					double dgdret_d = 0.;
 					// computes the derivative w.r.t change in own value (see Bhat 1995 for derivation)
 					for(dd = 0;dd<Noccs;dd++)  dgdret_d += -dgdret[dd];
+
 					
 					//**********************
 					// dgld / dWld
@@ -2559,9 +2562,9 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 	struct sys_sol * sol = st->sol;
 	struct sys_coef * sys = st->sys;
 	struct aux_coef * simdat = st->sim;
-	int init_T = 200, l,d,ll;
+	int init_T = 200, l,d,ll,zbad=0;
 	int Nl = 2*(Noccs+1);
-	int di,estiter,status =0,maxestiter=500;
+	int di,estiter,status =0,maxestiter=200;
 	if(dbg_iters == 1) maxestiter = 20;
 	double ** pld	= malloc(sizeof(double*)*Nl);
 	for(l = 0;l<Nl;l++)
@@ -2618,6 +2621,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 	mats1.var_zeta	= gsl_matrix_alloc(Noccs,Noccs);
 
 	// initialize Zz_hist with shocks that are actually the finding rate deviations
+	gsl_matrix_set_zero(Zz_hist);
 	for(di=0;di<simT;di++){
 		for(d=0;d<Noccs;d++)
 		gsl_matrix_set(Zz_hist,di,d+Notz,gsl_matrix_get(simdat->fd_hist_dat,di,d));
@@ -2798,7 +2802,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		}// end di = 1:simT
 		int zz_edges = 0;
 
-#pragma omp parallel for private(di,l,d)
+		#pragma omp parallel for private(di,l,d)
 		for(di=0;di<simT;di++){
 			// make private objects so it can be parallelized
 			double Zz_in[Nx];
@@ -2929,8 +2933,11 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			status += sys_ex_set(sys->N,sys->S,mats0);
 			status += sol_dyn(ss,sol, sys,1);
 		}else{
+			status++;
+			zbad ++;
 			printmat("zhist_bad.csv",zhist);
 			printvec("Zhist_bad.csv",Zhist);
+			if(zbad>10) break;
 		}
 
 		if(printlev>=4 || (status >0 && printlev>=2) || (estiter%10 ==0 && printlev>=2) ){
@@ -2990,7 +2997,7 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 		}
 
 		// converged on the right z process
-		if(zdist_i<1e-4 || (zdist_av >zdist_av_l+1e-4 && zdist_i<1e-2) ){
+		if(zdist_i<5e-3 || (zdist_av >zdist_av_l+5e-3 && zdist_i<1e-2) ){
 			printf("rhozz, rhoZ,s_urt,e^Z, status = %f,%f,%f,%f,%d \n",mats0->rhozz,mats0->rhoZ,s_urt,exp(Zmean_esti),status);
 			break;
 		}
@@ -5549,6 +5556,22 @@ int clear_econ(struct st_wr *st){
 	gsl_matrix_set_zero( (st->sys)->N );
 	gsl_matrix_set_zero( (st->sys)->S );
 
+	gsl_matrix_set_zero( (st->mats->Zz_hist)); 
+	gsl_matrix_set_zero( (st->mats->var_zeta) );
+	gsl_matrix_set_zero( (st->mats->var_eta) );
+	gsl_matrix_set_zero( (st->mats->Lambda) );
+	gsl_matrix_set_zero( (st->mats->Gamma) );
+
+//initialize the shock matrices with the value that corresponds to occupation finding rates
+	gsl_matrix_memcpy((st->mats)->Gamma,fd_mats->Gamma);
+	gsl_matrix_memcpy(st->mats->var_eta , fd_mats->var_eta);
+	gsl_matrix_memcpy(st->mats->var_zeta , fd_mats->var_zeta);
+	st->mats->rhoZ	= fd_mats->rhoZ;
+	st->mats->rhozz	= fd_mats->rhozz;
+	st->mats->sig_eps2 = fd_mats->sig_eps2;
+	gsl_matrix_memcpy(st->mats->Lambda,fd_mats->Lambda);
+
+
 	return status;
 }
 
@@ -6328,7 +6351,9 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 
 	int status=0,i,d;
 	struct st_wr * st = (struct st_wr * )params;
+	// clear the z-process and everything else
 	clear_econ(st);
+
 	struct aux_coef  * simdat	=  st->sim;
 	struct sys_coef  * sys		= st->sys;
 	struct sys_sol   * sol		= st->sol;
@@ -6338,7 +6363,6 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 	double dist;
 
 	set_params(x, st->cal_set);
-	// clear the z-process
 
 
 	int param_offset = st->cal_set == 1 || st->cal_set == 0 ? ((st->sim)->data_moments)->size2 : 0;
@@ -6376,33 +6400,38 @@ double cal_dist(unsigned n, const double *x, double *grad, void* params){
 	}
 	int Nmo = (simdat->data_moments)->size2;
 
-	dist = 0.0;
-	if(st->cal_set != 2){
-		for(i=0;i<Nmo;i++)
-			dist += gsl_matrix_get(simdat->moment_weights,0,i)*pow(gsl_matrix_get(simdat->data_moments,0,i),2);
-		if(verbose>=2){
-			if(st->cal_set!=3) printf("At phi=%f,sig_psi=%f,tau=%f,scale_s=%f,shape_s=%f,effic=%f\n",x[0],x[1],x[2],x[3],x[4],x[5]);
-			if(st->cal_set==3) printf("At phi=%f,scale_s=%f,shape_s=%f,effic=%f\n",x[0],x[1],x[2],x[3]);
-			if(status>0) printf("System did not solve \n");
-			printf("Calibration distance is %f\n",dist);
-		}
-	}
-	if(st->cal_set!=1 && st->cal_set != 3){
-		int n2 = st->cal_set == 0 ? st->n - param_offset : st->n;
-		// regression distance
-		for(i=0;i<n2;i++)
-			dist += gsl_matrix_get(simdat->moment_weights,1,i)*pow(gsl_matrix_get(simdat->data_moments,1,i),2);
-		if(verbose>=2){
-			for(i=0;i<n2;i++){
-				printf("At b%d=%f\n",i,x[i+param_offset]);
+	if(status == 0){
+		dist = 0.0;
+		if(st->cal_set != 2){
+			for(i=0;i<Nmo;i++)
+				dist += gsl_matrix_get(simdat->moment_weights,0,i)*pow(gsl_matrix_get(simdat->data_moments,0,i),2);
+			if(verbose>=1){
+				if(st->cal_set!=3) printf("At phi=%f,sig_psi=%f,tau=%f,scale_s=%f,shape_s=%f,effic=%f\n",x[0],x[1],x[2],x[3],x[4],x[5]);
+				if(st->cal_set==3) printf("At phi=%f,scale_s=%f,shape_s=%f,effic=%f\n",x[0],x[1],x[2],x[3]);
+				if(status>0) printf("System did not solve \n");
+				printf("Calibration distance is %f\n",dist);
 			}
-			printf("Calibration distance is %f\n",dist);
 		}
+		if(st->cal_set!=1 && st->cal_set != 3){
+			int n2 = st->cal_set == 0 ? st->n - param_offset : st->n;
+			// regression distance
+			for(i=0;i<n2;i++)
+				dist += gsl_matrix_get(simdat->moment_weights,1,i)*pow(gsl_matrix_get(simdat->data_moments,1,i),2);
+			if(verbose>=2){
+				for(i=0;i<n2;i++){
+					printf("At b%d=%f\n",i,x[i+param_offset]);
+				}
+				printf("Calibration distance is %f\n",dist);
+			}
+		}
+		if(dist>st->cal_worst)
+			st->cal_worst = dist;
+		if(dist<st->cal_best)
+			st->cal_best = dist;
 	}
-	if(dist>st->cal_worst)
-		st->cal_worst = dist;
-	if(dist<st->cal_best)
-		st->cal_best = dist;
+	else{
+		dist = 1.5*st->cal_worst;
+	}
 
 	if(printlev>=1){
 		// print the result of what I found here
