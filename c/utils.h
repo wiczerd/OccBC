@@ -239,6 +239,7 @@ int inv_wrap(gsl_matrix * invx, const gsl_matrix * x){
 
 #ifdef _MKL_USE
 	int* ipiv = (int*)malloc(sizeof(int)*r);
+	for(s=0;s<r;s++) ipiv[s] =0; //initialize
 	double * xdat;
 	if(invx->tda!=c){// will have to recopy into a row-major array
 		xdat = (double*)malloc(r*c*sizeof(double));
