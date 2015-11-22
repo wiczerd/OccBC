@@ -1,0 +1,49 @@
+FC 	= ifort
+IC	= icc
+FF77	= ifort
+
+SOLDIR	= /home/david/Computation/DFBOLS-Web/
+CDIR	= /home/david/Documents/CurrResearch/OccBC/program/c/
+FDIR	= /home/david/Documents/CurrResearch/OccBC/program/fortran/
+
+ILIBS	= -lgsl -lnlopt -lifcore -lifport
+ILOC	= -L/usr/local/lib/ -L/home/david/Computation/NLopt/lib -L/opt/intel/lib/intel64/
+IINC	= -I/home/david/Computation -I/usr/local/include
+
+ICFLAGS =  -openmp -mkl=parallel -static -O3 -D_MKL_USE=1 -D_DFBOLS_USE=1
+FCFLAGS = -c
+F77FLAGS= -c
+
+SOLOBJS = altmov.o rescue_h.o update.o prelim_h.o bobyqa_h.o bobyqb_h.o trsbox_h.o dfovec.o
+
+
+occBC: $ $(CDIR)occBC_hybr.c $(SOLOBJS) 
+	$(IC)  $(ICFLAGS)  $(CDIR)occBC_hybr.c $(SOLOBJS)  $(IINC) $(ILOC) $(ILIBS) -o occBC_hybr.out
+
+occHM: $ $(CDIR)occBC_HM.c $(SOLOBJS) 
+	$(IC)  $(ICFLAGS)  $(CDIR)occBC_HM.c $(SOLOBJS)  $(IINC) $(ILOC) $(ILIBS) -o occBC_HM.out
+
+# All the solver objects:
+altmov.o :  $(SOLDIR)altmov.f
+	$(FF77) $(F77FLAGS) $(SOLDIR)altmov.f
+
+rescue_h.o :  $(SOLDIR)rescue_h.f
+	$(FF77) $(F77FLAGS) $(SOLDIR)rescue_h.f
+
+update.o :  $(SOLDIR)update.f
+	$(FF77) $(F77FLAGS) $(SOLDIR)update.f
+	
+prelim_h.o :  $(SOLDIR)prelim_h.f
+	$(FF77) $(F77FLAGS) $(SOLDIR)prelim_h.f	
+	
+bobyqa_h.o :  $(SOLDIR)bobyqa_h.f
+	$(FF77) $(F77FLAGS) $(SOLDIR)bobyqa_h.f
+
+bobyqb_h.o :  $(SOLDIR)bobyqb_h.f
+	$(FF77) $(F77FLAGS) $(SOLDIR)bobyqb_h.f
+
+trsbox_h.o :  $(SOLDIR)trsbox_h.f
+	$(FF77) $(F77FLAGS) $(SOLDIR)trsbox_h.f
+	
+dfovec.o : $(FDIR)dfovec.f
+	$(FC) $(FCFLAGS) $(FDIR)dfovec.f
