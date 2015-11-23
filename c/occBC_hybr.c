@@ -49,7 +49,7 @@
 
 
 
-int Nsolerr		= 0;
+int Nsolerr	= 0;
 int Nobs;
 int simT = 218;
 int nsim, Nskill;
@@ -59,7 +59,7 @@ int verbose 	= 3;
 int printlev 	= 3;
 int rescale_var	= 0;
 int check_fin	= 1;
-int fd_dat_read = 0; // read in the actual data
+int fd_dat_read = 1; // read in the actual data
 int homosk_psi	= 1; // homskedastic psi assumption during the simulations
 int sym_occs	= 0; // debugging: make all occupations symmetric
 int szt_gsl		= 0; // use gls brent solver, or own?
@@ -2624,15 +2624,20 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 	mats1.Lambda	= gsl_matrix_alloc(Noccs,Nfac+1);
 	mats1.var_zeta	= gsl_matrix_alloc(Noccs,Noccs);
 
+	//set bounds
+	double zlb = log(b[1]); // can't be so low that even experienced workers don't want to work there
+	double zub = -zub_fac*zlb;
+
+
 	// initialize Zz_hist with shocks that are actually the finding rate deviations
 	gsl_matrix_set_zero(Zz_hist);
 	for(di=0;di<simT;di++){
 		for(d=0;d<Noccs;d++)
  			gsl_matrix_set(Zz_hist,di,d+Notz,gsl_matrix_get(simdat->fd_hist_dat,di,d));
-	//	gsl_matrix_set(Zz_hist,di,0,gsl_vector_get(fd_mats->ag,di));
-	//	for(fi=0;fi<Nfac;fi++){
-	//		gsl_matrix_set(Zz_hist,di,fi+1,gsl_matrix_get(fd_mats->facs,di,fi));
-	//	}
+		gsl_matrix_set(Zz_hist,di,0,gsl_vector_get(fd_mats->ag,di));
+		for(fi=0;fi<Nfac;fi++){
+			gsl_matrix_set(Zz_hist,di,fi+1,gsl_matrix_get(fd_mats->facs,di,fi));
+		}
 	}
 	// re-norm so that the mean of e(z) is always 1:
 	double Zmean_esti = 0.;
@@ -2835,6 +2840,13 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			for(d=0;d<Noccs;d++) zz_invth[d] = 0.;
 			zz_edges += invtheta_z(zz_invth,fd_dat,ss,sys,&sol_hist[di],Zz_in);
 
+			for(d=0;d<Noccs;d++){
+				if(zz_invth[d]<zlb){
+					zz_invth[d] = zlb;
+				}if(zz_invth[d]>zub)
+					zz_invth[d] = zub;
+			}
+
 			//store Z (weighted) average
 			double xd[Noccs];
 			for( d=0;d<Noccs;d++ ){
@@ -2848,7 +2860,9 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			for( d=0;d<Noccs;d++ ) xd_sum += xd[d];
 			for( d=0;d<Noccs;d++ ) xd[d] /= xd_sum;
 			double Z_fd = 0.;
-			for(d=0;d<Noccs;d++) Z_fd +=   zz_invth[d]/(double)Noccs;//*xd[d];
+			for(d=0;d<Noccs;d++) Z_fd +=   zz_invth[d]*xd[d];// /(double)Noccs
+			if(Z_fd<zlb){
+				Z_fd = zlb;}
 			gsl_vector_set(Zhist,di,Z_fd);
 
 			// store zz_invth
@@ -2859,12 +2873,10 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			if(verbose>=3) printf("hit the edge %d times\n",zz_edges);
 		}
 		// copy the history of implied shocks in to the feed-in shocks (with a weighting)
-		double zlb = log(b[1]); // can't be so low that even experienced workers don't want to work there
-		double zub = -zub_fac*zlb;
 		for(di=0;di<simT;di++){
 		//	if(gsl_finite(gsl_vector_get(Zhist,di))==1 && gsl_vector_get(Zhist,di) > zlb && gsl_vector_get(Zhist,di) <zub)
-			if(gsl_finite(gsl_vector_get(Zhist,di))==1)		
-		gsl_matrix_set(Zz_hist,di,0,zmt_upd*gsl_vector_get(Zhist,di)
+			if(gsl_finite(gsl_vector_get(Zhist,di))==1 )
+				gsl_matrix_set(Zz_hist,di,0,zmt_upd*gsl_vector_get(Zhist,di)
 											+ (1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,0));
 			else
 				gsl_matrix_set(Zz_hist,di,0,gsl_matrix_get(Zz_hist,di,0));
@@ -2878,14 +2890,14 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 				}
 				//if ( (xd>0 && xpd>0) && //not zero in this occuption
 				//	(gsl_finite(gsl_matrix_get(zhist,di,d))==1 && gsl_matrix_get(zhist,di,d) > zlb && gsl_matrix_get(zhist,di,d) <zub)) // finite z
-				if(gsl_finite(gsl_matrix_get(zhist,di,d))==1)
+				if(gsl_finite(gsl_matrix_get(zhist,di,d))==1 )
 					gsl_matrix_set(Zz_hist,di,d+Notz,zmt_upd*gsl_matrix_get(zhist,di,d)
 												 +(1.-zmt_upd)*gsl_matrix_get(Zz_hist,di,d+Notz));
 				else
 					gsl_matrix_set(Zz_hist,di,d+Notz,gsl_matrix_get(Zz_hist,di,d+Notz));
 			}
 		}
-		// re-norm so that the mean of e(z) is always 1:
+		/* re-norm so that the mean of e(z) is always 1:
 		Zmean_esti = 0.;
 		for(d=0;d<Noccs;d++) zzmean_esti[d] = 0.;
 		for(di=0;di<simT;di++){
@@ -2909,12 +2921,32 @@ int sol_zproc(struct st_wr *st, gsl_vector * ss, gsl_matrix * xss, struct shock_
 			if(gsl_finite(zzvar_esti[d]) != 1)
 				zzvar_esti[d] = 0.;
 		}
-
 		for(di=0;di<simT;di++){
 			gsl_matrix_set(Zz_hist,di,0,gsl_matrix_get(Zz_hist,di,0)-Zmean_esti-Zvar_esti/2 );
 			for(d=0;d<Noccs;d++)
 				gsl_matrix_set(Zz_hist,di,Notz+d,gsl_matrix_get(Zz_hist,di,Notz+d)-zzmean_esti[d]-zzvar_esti[d]/2);
 		}
+		*/
+		Zmean_esti =0.;
+		for(d=0;d<Noccs;d++) zzmean_esti[d] = 0.;
+		for(di=0;di<simT;di++){
+			Zmean_esti += exp(gsl_matrix_get(Zz_hist,di,0))/(double)simT;
+			for(d=0;d<Noccs;d++)
+				zzmean_esti[d] += exp(gsl_matrix_get(Zz_hist,di,d+Notz))/(double)simT;
+		}
+		Zmean_esti = log(Zmean_esti);
+		for(d=0;d<Noccs;d++) zzmean_esti[d] = log(zzmean_esti[d]);
+		for(di=0;di<simT;di++){
+			double Zhere = gsl_matrix_get(Zz_hist,di,0) - Zmean_esti;
+			gsl_matrix_set(Zz_hist,di,0,Zhere);
+			for(d=0;d<Noccs;d++){
+				double zzhere = gsl_matrix_get(Zz_hist,di,d+Notz) - zzmean_esti[d];
+				gsl_matrix_set(Zz_hist,di,d+Notz,zzhere);
+			}
+
+		}
+
+
 
 		/////////////////////////////////////////////////////////
 		// Estimate on new data and update!!
