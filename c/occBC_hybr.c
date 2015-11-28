@@ -3994,7 +3994,7 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 	for(t=0;t<Ndraw;t++){
 		double popt =0.;
 		double popt_LTU =0;
-		for(duri=1;duri<24;duri++){
+		for(duri=0;duri<24;duri++){
 			for(l=0;l<Noccs+1;l++){
 				for(d=0;d<Noccs;d++){
 					int tM1 = t>0 ? t-1 : t;
