@@ -749,16 +749,20 @@ int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef *sys, int sol
 		gsl_matrix * invF0F1 = gsl_matrix_calloc(Nc,Ns);
 
 	#ifdef _MKL_USE
-		gsl_matrix * F0LU =gsl_matrix_calloc((sys->F0)->size1,(sys->F0)->size2);
-		gsl_matrix_memcpy(F0LU,sys->F0);
+		//gsl_matrix * F0LU =gsl_matrix_calloc((sys->F0)->size1,(sys->F0)->size2);
+		double * F0LU = malloc(sizeof(double)*(sys->F0)->size1 * (sys->F0)->size2);
+		//for(i=0;i<(sys->F0)->size1;i++)
+		//	F0LU[i] = malloc(sizeof(double)*(sys->F0)->size2);
+		gsl_matrix_view F0LUmat = gsl_matrix_view_array(F0LU,(sys->F0)->size1,(sys->F0)->size2);
+		gsl_matrix_memcpy(&F0LUmat.matrix ,sys->F0);
 		int * ipiv = malloc(sizeof(int)* ((sys->F0)->size2) );
 		for(s=0;s< sys->F0->size2; s++ ) ipiv[s] =0.;
-		status =LAPACKE_dgetrf(LAPACK_ROW_MAJOR, (sys->F0)->size1,(sys->F0)->size2, F0LU->data, (sys->F0)->size2,ipiv );
+		status =LAPACKE_dgetrf(LAPACK_ROW_MAJOR, (sys->F0)->size1,(sys->F0)->size2, F0LU, (sys->F0)->size2,ipiv );
 		gsl_matrix_memcpy(invF0F1,sys->F1);
 		//							order	,	trans,	n row b or a	, nrhs,
 		status += LAPACKE_dgetrs(LAPACK_ROW_MAJOR, 'N',  (sys->F0)->size1, (sys->F1)->size2,
 		//		a	,		lda,			, work,	b,		ldb
-				F0LU->data, (sys->F0)->size2, ipiv, invF0F1->data, invF0F1->size2);
+				F0LU, (sys->F0)->size2, ipiv, invF0F1->data, invF0F1->size2);
 		//status += sol_AXM(F0LU, sys->F1, invF0F1, ipiv);
 
 	#endif
@@ -785,7 +789,7 @@ int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef *sys, int sol
 		gsl_matrix_memcpy(invF0F2,sys->F2);
 
 		status += LAPACKE_dgetrs(LAPACK_ROW_MAJOR, 'N',  (sys->F0)->size1, (sys->F2)->size2,
-				F0LU->data, (sys->F0)->size2, ipiv, invF0F2->data, invF0F2->size2);
+				F0LU, (sys->F0)->size2, ipiv, invF0F2->data, invF0F2->size2);
 	#endif
 
 	#ifndef _MKL_USE
@@ -802,7 +806,7 @@ int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef *sys, int sol
 	#ifdef _MKL_USE
 		gsl_matrix_memcpy(invF0F3,sys->F3);
 		status += LAPACKE_dgetrs(LAPACK_ROW_MAJOR, 'N',  (sys->F0)->size1, (sys->F3)->size2,
-				F0LU->data, (sys->F0)->size2, ipiv, invF0F3->data, invF0F3->size2);
+				F0LU, (sys->F0)->size2, ipiv, invF0F3->data, invF0F3->size2);
 	#endif
 
 	#ifndef _MKL_USE
@@ -835,7 +839,7 @@ int sol_dyn(gsl_vector * ss, struct sys_sol * sol, struct sys_coef *sys, int sol
 		free(ipiv);
 	#endif
 	#ifdef _MKL_USE
-		gsl_matrix_free(F0LU);
+		free(F0LU);
 		free(ipiv);
 	#endif
 
@@ -3861,7 +3865,7 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 	double * d_dur_l = malloc(sizeof(double)*(Noccs+1));
 
 	double dur_t[Ndraw];
-	double ** Ft_l = malloc(sizeof(double)*Ndraw);
+	double ** Ft_l = malloc(sizeof(double*)*Ndraw);
 	double ** durpop_t_ldur = malloc(sizeof(double*)*Ndraw);
 	for(t=0;t<Ndraw;t++){
 		durpop_t_ldur[t] = malloc(sizeof(double)*24*(Noccs+1));
@@ -3901,41 +3905,45 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 	t=0;
 	for(duri=0;duri<24;duri++){
 		for(l=0;l<Noccs+1;l++) durpop_t_ldur[t][duri*(Noccs+1)+l] = 0.;
-	}//initialize with exponential
-	for(l=0;l<Noccs+1;l++){
-		duri =0;
-		durpop_t_ldur[t][duri*(Noccs+1) +l] = gsl_matrix_get(x_ust_hist,t,l);
-		durpop_t_ldur[t][duri*(Noccs+1) +l]=0.;
-		for(d=0;d<Noccs;d++) {
-			double frt_ld = gsl_matrix_get(gld_hist,t,l*Noccs+d)*gsl_matrix_get(pld_hist,t,l*Noccs+d);
-			for(duri=1;duri<24;duri++){
-				durpop_t_ldur[t][duri*(Noccs+1) +l] += durpop_t_ldur[t][(duri-1)*(Noccs+1) +l]*(1.-frt_ld) ;
-			}
-			Ft_l[t][l] += frt_ld;
+	}//initialize
+	for(l=0;l<Noccs+1;l++) {
+		duri = 0;
+		durpop_t_ldur[t][duri * (Noccs + 1) + l] = gsl_matrix_get(x_ust_hist, t, l);
+		Ft_l[t][l] = 0.;
+		for (d = 0; d < Noccs; d++) //constant hazard rate
+			Ft_l[t][l] += gsl_matrix_get(gld_hist, t, l * Noccs + d) * gsl_matrix_get(pld_hist, t, l * Noccs + d);
+
+		for (duri = 1; duri < 24; duri++) {
+			durpop_t_ldur[t][duri * (Noccs + 1) + l] =
+					durpop_t_ldur[t][(duri - 1) * (Noccs + 1) + l] * (1. - Ft_l[t][l]);
 		}
-
-
 	}
 
 	for(t=1;t<Ndraw;t++){
-		for(duri=0;duri<24;duri++){
-			for(l=0;l<Noccs+1;l++) durpop_t_ldur[t][duri*(Noccs+1)+l] = 0.;
-		}
+		//for(duri=0;duri<24;duri++){
+		//	for(l=0;l<Noccs+1;l++) durpop_t_ldur[t][duri*(Noccs+1)+l] = 0.;
+		//}
 		for(l=0;l<Noccs+1;l++)
-			durpop_t_ldur[t][l] = gsl_matrix_get(x_ust_hist,t,l);
-		for(l=0;l<Noccs+1;l++) {
+			durpop_t_ldur[t][0*(Noccs+1)+l] = gsl_matrix_get(x_ust_hist,t,l);
+		for(duri=1;duri<24;duri++){
 			Ft_l[t][l] = 0.;
-			durpop_t_ldur[t][duri * (Noccs + 1) + l] = 0.;
+			for(l=0;l<Noccs+1;l++){
+				for(d=0;d<Noccs;d++) Ft_l[t][l] += gsl_matrix_get(gld_hist, t-1, l*Noccs + d)*gsl_matrix_get(pld_hist, t-1, l*Noccs + d);
+				durpop_t_ldur[t][duri*(Noccs+1)+l] = durpop_t_ldur[t-1][(duri-1)*(Noccs+1)+l]*(1.-Ft_l[t][l]);
+			}
+		}
+		/*for(l=0;l<Noccs+1;l++) {
+			Ft_l[t][l] = 0.;
 			for (d = 0; d < Noccs; d++){
-				double frt_ld = gsl_matrix_get(gld_hist, t - 1, l * Noccs + d) *
-						 gsl_matrix_get(pld_hist, t - 1, l * Noccs + d);
+				double frt_ld = gsl_matrix_get(gld_hist, t-1, l*Noccs + d)*gsl_matrix_get(pld_hist, t-1, l*Noccs + d);
 				for (duri = 1; duri < 24; duri++)
-					durpop_t_ldur[t][duri * (Noccs + 1) + l] +=
-							durpop_t_ldur[t - 1][(duri - 1) * (Noccs + 1) + l] * (1. - frt_ld);
+					durpop_t_ldur[t][duri*(Noccs+1) + l] =
+							durpop_t_ldur[t-1][(duri - 1)*(Noccs+1) + l] *gsl_matrix_get(gld_hist, t-1, l*Noccs + d)*
+									(1.-gsl_matrix_get(pld_hist, t-1, l*Noccs + d));
 				Ft_l[t][l] += frt_ld;
 			}
 
-		}
+		}*/
 	}
 
 	// average duration by period
@@ -5377,7 +5385,7 @@ int est_fac_pro(gsl_matrix* occ_prod,gsl_vector* mon_Z, struct shock_mats * mats
 	gsl_matrix *residzz, * facs, *loadings,*xreg;
 	int t,c,fi,d,status = 0;
 	int T = mon_Z->size-1;
-	int iter,maxiter=1;
+	int iter,maxiter=4;
 	facs 	= gsl_matrix_alloc(T,Nfac);
 	loadings = gsl_matrix_alloc(Noccs,Nfac);
 	xreg	= gsl_matrix_calloc(T*Noccs,Noccs*(Nfac+1) +1);
