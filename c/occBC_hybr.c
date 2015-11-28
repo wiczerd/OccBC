@@ -3191,10 +3191,10 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 	}
 	struct dur_moments s_mom;
 	if(printlev>=2){
-		s_mom.Fdur = gsl_vector_calloc(5);
-		s_mom.Fdur_occ = gsl_vector_calloc(5);
+		s_mom.Fdur = gsl_vector_calloc(6);
+		s_mom.Fdur_occ = gsl_vector_calloc(6);
 		s_mom.Ft = gsl_vector_calloc(Ndraw);
-		s_mom.xFdur = gsl_vector_calloc(5);
+		s_mom.xFdur = gsl_vector_calloc(6);
 		s_mom.dur_hist = gsl_vector_calloc(Ndraw);
 		s_mom.pr6mo_hist = gsl_vector_calloc(Ndraw);
 		s_mom.dur_l_hist = gsl_matrix_calloc(Ndraw,Noccs+1);
@@ -3852,111 +3852,111 @@ int sim_moments(struct st_wr * st, gsl_vector * ss,gsl_matrix * xss){
 }
 
 
-int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_matrix * pld_hist, const gsl_matrix * x_u_hist, const gsl_matrix * x_ust_hist){
-	int status,l,d,duri,t,tp;
-	s_mom->E_dur	= 0.0;
-	s_mom->sd_dur	= 0.0;
-	s_mom->pr6mo	= 0.0;
+int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_matrix * pld_hist, const gsl_matrix * x_u_hist, const gsl_matrix * x_ust_hist) {
+	int status, l, d, duri, t, tp;
+	s_mom->E_dur = 0.0;
+	s_mom->sd_dur = 0.0;
+	s_mom->pr6mo = 0.0;
 
-	status =0;
+	status = 0;
 	int Ndraw = x_u_hist->size1;
+	int Ndir  = Noccs*(Noccs+1);
 
-	double durs[] = {1.0,3.0,6.0,12.0,24.0};
-	double * d_dur_l = malloc(sizeof(double)*(Noccs+1));
+	double durs[] = {0., 1.0, 3.0, 6.0, 12.0, 24.0};
+	double *d_dur_l = malloc(sizeof(double) * (Noccs + 1));
 
 	double dur_t[Ndraw];
-	double ** Ft_l = malloc(sizeof(double*)*Ndraw);
-	double ** durpop_t_ldur = malloc(sizeof(double*)*Ndraw);
-	for(t=0;t<Ndraw;t++){
-		durpop_t_ldur[t] = malloc(sizeof(double)*24*(Noccs+1));
-		Ft_l[t] = malloc(sizeof(double)*(Noccs+1));
+	double **Ft_l = malloc(sizeof(double *) * Ndraw);
+	double **durpop_t_ldur = malloc(sizeof(double *) * Ndraw);
+	for (t = 0; t < Ndraw; t++) {
+		durpop_t_ldur[t] = malloc(sizeof(double) * 24 *Ndir);
+		Ft_l[t] = malloc(sizeof(double) * (Noccs + 1));
 	}
 
 
 	gsl_vector_set_zero(s_mom->Fdur);
 
-	for(duri =0;duri <5;duri ++){ // loop over each value of vector durs
+	for (duri = 0; duri < 6; duri++) { // loop over each value of vector durs
 		double Fdur_ld = 0.0; // finding rate in each direction
 		double xt_ld = 0.0; // number in each direction
 		double Fdur_occ = 0.0; // overall finding rate
 		double xt_occ = 0.0;
-		for(t=0;t<Ndraw;t++){
-			for(l=0;l<Noccs+1;l++){
+		for (t = 0; t < Ndraw; t++) {
+			for (l = 0; l < Noccs + 1; l++) {
 				double fnd_occ = 0.0;
-				for(d=0;d<Noccs;d++){
-					fnd_occ += gsl_matrix_get(gld_hist,t,l*Noccs+d)*gsl_matrix_get(pld_hist,t,l*Noccs+d);
-					Fdur_ld += gsl_matrix_get(x_u_hist,t,l)*gsl_matrix_get(gld_hist,t,l*Noccs+d)
-							*pow(1.- gsl_matrix_get(pld_hist,t,l*Noccs+d),durs[duri])*gsl_matrix_get(pld_hist,t,l*Noccs+d);
-					xt_ld += gsl_matrix_get(x_u_hist,t,l)*gsl_matrix_get(gld_hist,t,l*Noccs+d)
-							*pow(1.- gsl_matrix_get(pld_hist,t,l*Noccs+d),durs[duri]);
+				for (d = 0; d < Noccs; d++) {
+					fnd_occ += gsl_matrix_get(gld_hist, t, l * Noccs + d) * gsl_matrix_get(pld_hist, t, l * Noccs + d);
+					Fdur_ld += gsl_matrix_get(x_u_hist, t, l) * gsl_matrix_get(gld_hist, t, l * Noccs + d)
+							   * pow(1. - gsl_matrix_get(pld_hist, t, l * Noccs + d), durs[duri]-1) *
+							   gsl_matrix_get(pld_hist, t, l * Noccs + d);
+					xt_ld += gsl_matrix_get(x_u_hist, t, l) * gsl_matrix_get(gld_hist, t, l * Noccs + d)
+							 * pow(1. - gsl_matrix_get(pld_hist, t, l * Noccs + d), durs[duri]-1);
 				}
-				Fdur_occ += gsl_matrix_get(x_u_hist,t,l)*pow(1.- fnd_occ,durs[duri])*fnd_occ;
-				xt_occ += gsl_matrix_get(x_u_hist,t,l)*pow(1.- fnd_occ,durs[duri]);
+				Fdur_occ += gsl_matrix_get(x_u_hist, t, l) * pow(1. - fnd_occ, durs[duri]-1) * fnd_occ;
+				xt_occ += gsl_matrix_get(x_u_hist, t, l) * pow(1. - fnd_occ, durs[duri]-1);
 			}
 		}
-		Fdur_ld	/= xt_ld;
-		Fdur_occ	/= xt_occ;
-		gsl_vector_set(s_mom->Fdur,duri,Fdur_ld);
-		gsl_vector_set(s_mom->xFdur,duri,xt_ld);
-		gsl_vector_set(s_mom->Fdur_occ,duri,Fdur_occ);
+		Fdur_ld /= xt_ld;
+		Fdur_occ /= xt_occ;
+		gsl_vector_set(s_mom->Fdur, duri, Fdur_ld);
+		gsl_vector_set(s_mom->xFdur, duri, xt_ld);
+		gsl_vector_set(s_mom->Fdur_occ, duri, Fdur_occ);
 	}// for duri in durs
 
 	// duration for each month of the X-section:
-	t=0;
-	for(duri=0;duri<24;duri++){
-		for(l=0;l<Noccs+1;l++) durpop_t_ldur[t][duri*(Noccs+1)+l] = 0.;
-	}//initialize
-	for(l=0;l<Noccs+1;l++) {
-		duri = 0;
-		durpop_t_ldur[t][duri * (Noccs + 1) + l] = gsl_matrix_get(x_ust_hist, t, l);
-		Ft_l[t][l] = 0.;
-		for (d = 0; d < Noccs; d++) //constant hazard rate
-			Ft_l[t][l] += gsl_matrix_get(gld_hist, t, l * Noccs + d) * gsl_matrix_get(pld_hist, t, l * Noccs + d);
-
-		for (duri = 1; duri < 24; duri++) {
-			durpop_t_ldur[t][duri * (Noccs + 1) + l] =
-					durpop_t_ldur[t][(duri - 1) * (Noccs + 1) + l] * (1. - Ft_l[t][l]);
+	//////////////////////////////////////////
+	//initialize
+	for(t=0;t<Ndraw;t++){
+		for (duri = 0; duri < 24; duri++) {
+			for(d=0;d<Noccs;d++){
+				for (l = 0; l < Noccs + 1; l++) durpop_t_ldur[t][duri*Ndir + l*Noccs + d] = 0.;
+			}
+		}
+		for (l = 0; l < Noccs + 1; l++) {
+			Ft_l[t][l] = 0.;
+			for (d = 0; d < Noccs; d++)
+				Ft_l[t][l] += gsl_matrix_get(gld_hist, t, l*Noccs + d) * gsl_matrix_get(pld_hist, t, l*Noccs + d);
+			for (d = 0; d < Noccs; d++) {
+				//constant hazard rate
+				duri = 0;
+				durpop_t_ldur[t][duri*Ndir  + l*Noccs + d] = gsl_matrix_get(x_ust_hist, t, l)/(1.-Ft_l[t][l]) / Ft_l[t][l] ;
+				for (duri = 1; duri < 24; duri++) {
+					durpop_t_ldur[t][duri*Ndir  + l*Noccs + d] =
+							durpop_t_ldur[t][(duri - 1)*Ndir  + l*Noccs + d] * (1. - gsl_matrix_get(pld_hist, t, l*Noccs + d));
+				}
+			}
 		}
 	}
 
 	for(t=1;t<Ndraw;t++){
-		//for(duri=0;duri<24;duri++){
-		//	for(l=0;l<Noccs+1;l++) durpop_t_ldur[t][duri*(Noccs+1)+l] = 0.;
-		//}
-		for(l=0;l<Noccs+1;l++)
-			durpop_t_ldur[t][0*(Noccs+1)+l] = gsl_matrix_get(x_ust_hist,t,l);
-		for(duri=1;duri<24;duri++){
+		for(l=0;l<Noccs+1;l++){
 			Ft_l[t][l] = 0.;
-			for(l=0;l<Noccs+1;l++){
-				for(d=0;d<Noccs;d++) Ft_l[t][l] += gsl_matrix_get(gld_hist, t-1, l*Noccs + d)*gsl_matrix_get(pld_hist, t-1, l*Noccs + d);
-				durpop_t_ldur[t][duri*(Noccs+1)+l] = durpop_t_ldur[t-1][(duri-1)*(Noccs+1)+l]*(1.-Ft_l[t][l]);
+			for(d=0;d<Noccs;d++)
+				Ft_l[t][l] += gsl_matrix_get(gld_hist, t-1, l*Noccs + d)*gsl_matrix_get(pld_hist, t-1, l*Noccs + d);
+			for(d=0;d<Noccs;d++){
+				durpop_t_ldur[t][0*Ndir+l*Noccs+d] = gsl_matrix_get(x_ust_hist,t,l)/(1.-Ft_l[t][l]);
+				for(duri=1;duri<24;duri++) {
+					durpop_t_ldur[t][duri*Ndir+ l*Noccs + d] = //gsl_matrix_get(gld_hist, t-1, l*Noccs + d)*
+							durpop_t_ldur[t - 1][(duri - 1)*Ndir + l*Noccs + d] * (1. - gsl_matrix_get(pld_hist, t-1, l*Noccs + d));
+				}
 			}
 		}
-		/*for(l=0;l<Noccs+1;l++) {
-			Ft_l[t][l] = 0.;
-			for (d = 0; d < Noccs; d++){
-				double frt_ld = gsl_matrix_get(gld_hist, t-1, l*Noccs + d)*gsl_matrix_get(pld_hist, t-1, l*Noccs + d);
-				for (duri = 1; duri < 24; duri++)
-					durpop_t_ldur[t][duri*(Noccs+1) + l] =
-							durpop_t_ldur[t-1][(duri - 1)*(Noccs+1) + l] *gsl_matrix_get(gld_hist, t-1, l*Noccs + d)*
-									(1.-gsl_matrix_get(pld_hist, t-1, l*Noccs + d));
-				Ft_l[t][l] += frt_ld;
-			}
-
-		}*/
 	}
 
 	// average duration by period
 	for(t=0;t<Ndraw;t++){
 		dur_t[t] =0.;
-		double popt=0;
+		double popt=0,dur_lt,poplt;
 		gsl_vector_set(s_mom->Ft,t,0.);
 		for(l=0;l<Noccs+1;l++){
-			double poplt =0.;
-			double dur_lt=0.;
-			for(duri=0;duri<24;duri++){
-				poplt += durpop_t_ldur[t][ duri*(Noccs+1)+l ];
-				dur_lt += (double)duri * durpop_t_ldur[t][ duri*(Noccs+1)+l ];
+			poplt =0.;
+			dur_lt=0.;
+			for(d=0;d<Noccs;d++){
+				for(duri=1;duri<24;duri++){
+					int tM1 = t>0 ? t-1 : t;
+					poplt += durpop_t_ldur[t][duri*Ndir+ l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
+					dur_lt += (double)duri * durpop_t_ldur[t][duri*Ndir+ l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
+				}
 			}
 			dur_lt /=poplt;
 			popt += poplt;
@@ -3971,13 +3971,16 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 
 	//average duration by occupation and period and standard deviation
 	for(t=0;t<Ndraw;t++){
-		double dursd_t =0.;
+		double dursd_t =0.,dur_t_l,pop_t_l;
 		for(l=0;l<Noccs+1;l++){
-			double dur_t_l =0.;
-			double pop_t_l =0.;
-			for(duri=0;duri<24;duri++){
-				pop_t_l += durpop_t_ldur[t][ duri*(Noccs+1)+l ];
-				dur_t_l += (double)duri * durpop_t_ldur[t][ duri*(Noccs+1)+l ];
+			dur_t_l =0.;
+			pop_t_l =0.;
+			for(d=0;d<Noccs;d++){
+				for(duri=1;duri<24;duri++){
+					int tM1 = t>0 ? t-1 : t;
+					pop_t_l += durpop_t_ldur[t][duri*Ndir+ l*Noccs+ d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
+					dur_t_l += (double)duri * durpop_t_ldur[t][duri*Ndir+ l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
+				}
 			}
 			dur_t_l /= pop_t_l;
 			gsl_matrix_set(s_mom->dur_l_hist,t,l,dur_t_l);
@@ -3991,16 +3994,18 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 	for(t=0;t<Ndraw;t++){
 		double popt =0.;
 		double popt_LTU =0;
-		for(duri=0;duri<24;duri++){
+		for(duri=1;duri<24;duri++){
 			for(l=0;l<Noccs+1;l++){
-				popt += durpop_t_ldur[t][duri*(Noccs+1)+ l];
-				if(duri>=6)popt_LTU += durpop_t_ldur[t][duri*(Noccs+1)+ l];
+				for(d=0;d<Noccs;d++){
+					int tM1 = t>0 ? t-1 : t;
+					popt += durpop_t_ldur[t][duri*Ndir + l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
+					if(duri>=6)popt_LTU += durpop_t_ldur[t][duri*Ndir + l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
+				}
 			}
 		}
 		gsl_vector_set(s_mom->pr6mo_hist,t,popt/popt_LTU);
 		s_mom ->pr6mo += (popt_LTU/popt) /(double)Ndraw;
 	}
-
 
 
 	/*for(t=0;t<Ndraw;t++){
