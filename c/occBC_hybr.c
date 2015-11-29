@@ -55,6 +55,7 @@ int simT = 218;
 int nsim, Nskill;
 int nshock;
 int neq;
+int bdur_expr	= 0; // experiment with not extending UI benefit duration?
 int verbose 	= 3;
 int printlev 	= 3;
 int rescale_var	= 0;
@@ -244,6 +245,7 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 
 int fd_dat_sim(gsl_matrix * fd_hist_dat, struct shock_mats * fd_mats);
 
+
 int TGR(//gsl_vector* u_dur_dist, gsl_vector* opt_dur_dist, gsl_vector * fnd_dist, gsl_vector * opt_fnd_dist,
 		//double *urt, double *opt_urt,
 		struct st_wr * st);
@@ -264,6 +266,7 @@ int alloc_econ(struct st_wr * st);
 int free_econ(struct st_wr * st);
 int clear_econ(struct st_wr *st);
 
+double bdur_t(int t);
 double qmatch(const double theta);
 double pmatch(const double theta);
 double dqmatch(const double theta);
@@ -3870,9 +3873,8 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 	double **durpop_t_ldur = malloc(sizeof(double *) * Ndraw);
 	for (t = 0; t < Ndraw; t++) {
 		durpop_t_ldur[t] = malloc(sizeof(double) * 24 *Ndir);
-		Ft_l[t] = malloc(sizeof(double) * (Noccs + 1));
+		Ft_l[t] = malloc(sizeof(double) * (Noccs+1));
 	}
-
 
 	gsl_vector_set_zero(s_mom->Fdur);
 
@@ -3882,18 +3884,20 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 		double Fdur_occ = 0.0; // overall finding rate
 		double xt_occ = 0.0;
 		for (t = 0; t < Ndraw; t++) {
-			for (l = 0; l < Noccs + 1; l++) {
+
+			for (l = 0; l < Noccs+1; l++) {
 				double fnd_occ = 0.0;
+				int ll = duri> (int) bdur_t(t) ? l + Noccs+1 : l;
 				for (d = 0; d < Noccs; d++) {
-					fnd_occ += gsl_matrix_get(gld_hist, t, l * Noccs + d) * gsl_matrix_get(pld_hist, t, l * Noccs + d);
-					Fdur_ld += gsl_matrix_get(x_u_hist, t, l) * gsl_matrix_get(gld_hist, t, l * Noccs + d)
-							   * pow(1. - gsl_matrix_get(pld_hist, t, l * Noccs + d), durs[duri]-1) *
-							   gsl_matrix_get(pld_hist, t, l * Noccs + d);
-					xt_ld += gsl_matrix_get(x_u_hist, t, l) * gsl_matrix_get(gld_hist, t, l * Noccs + d)
-							 * pow(1. - gsl_matrix_get(pld_hist, t, l * Noccs + d), durs[duri]-1);
+					fnd_occ += gsl_matrix_get(gld_hist, t, ll * Noccs + d) * gsl_matrix_get(pld_hist, t, ll * Noccs + d);
+					Fdur_ld += gsl_matrix_get(x_u_hist, t, ll) * gsl_matrix_get(gld_hist, t, ll * Noccs + d)
+							   * pow(1. - gsl_matrix_get(pld_hist, t, ll * Noccs + d), durs[duri]-1) *
+							   gsl_matrix_get(pld_hist, t, ll * Noccs + d);
+					xt_ld += gsl_matrix_get(x_u_hist, t, ll) * gsl_matrix_get(gld_hist, t, ll * Noccs + d)
+							 * pow(1. - gsl_matrix_get(pld_hist, t, ll * Noccs + d), durs[duri]-1);
 				}
-				Fdur_occ += gsl_matrix_get(x_u_hist, t, l) * pow(1. - fnd_occ, durs[duri]-1) * fnd_occ;
-				xt_occ += gsl_matrix_get(x_u_hist, t, l) * pow(1. - fnd_occ, durs[duri]-1);
+				Fdur_occ += gsl_matrix_get(x_u_hist, t, ll) * pow(1. - fnd_occ, durs[duri]-1) * fnd_occ;
+				xt_occ += gsl_matrix_get(x_u_hist, t, ll) * pow(1. - fnd_occ, durs[duri]-1);
 			}
 		}
 		Fdur_ld /= xt_ld;
@@ -3921,8 +3925,9 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 				duri = 0;
 				durpop_t_ldur[t][duri*Ndir  + l*Noccs + d] = gsl_matrix_get(x_ust_hist, t, l)/(1.-Ft_l[t][l]) / Ft_l[t][l] ;
 				for (duri = 1; duri < 24; duri++) {
+					int ll = duri> (int) bdur_t(t) ? l + Noccs+1 : l;
 					durpop_t_ldur[t][duri*Ndir  + l*Noccs + d] =
-							durpop_t_ldur[t][(duri - 1)*Ndir  + l*Noccs + d] * (1. - gsl_matrix_get(pld_hist, t, l*Noccs + d));
+							durpop_t_ldur[t][(duri - 1)*Ndir  + l*Noccs + d] * (1. - gsl_matrix_get(pld_hist, t, ll*Noccs + d));
 				}
 			}
 		}
@@ -3936,8 +3941,9 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 			for(d=0;d<Noccs;d++){
 				durpop_t_ldur[t][0*Ndir+l*Noccs+d] = gsl_matrix_get(x_ust_hist,t,l)/(1.-Ft_l[t][l]);
 				for(duri=1;duri<24;duri++) {
+					int ll = duri> (int) bdur_t(t) ? l + Noccs+1 : l;
 					durpop_t_ldur[t][duri*Ndir+ l*Noccs + d] = //gsl_matrix_get(gld_hist, t-1, l*Noccs + d)*
-							durpop_t_ldur[t - 1][(duri - 1)*Ndir + l*Noccs + d] * (1. - gsl_matrix_get(pld_hist, t-1, l*Noccs + d));
+							durpop_t_ldur[t - 1][(duri - 1)*Ndir + l*Noccs + d] * (1. - gsl_matrix_get(pld_hist, t-1, ll*Noccs + d));
 				}
 			}
 		}
@@ -3953,9 +3959,10 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 			dur_lt=0.;
 			for(d=0;d<Noccs;d++){
 				for(duri=1;duri<24;duri++){
+					int ll = duri> (int) bdur_t(t) ? l + Noccs+1 : l;
 					int tM1 = t>0 ? t-1 : t;
-					poplt += durpop_t_ldur[t][duri*Ndir+ l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
-					dur_lt += (double)duri * durpop_t_ldur[t][duri*Ndir+ l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
+					poplt += durpop_t_ldur[t][duri*Ndir+ l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, ll*Noccs + d);
+					dur_lt += (double)duri * durpop_t_ldur[t][duri*Ndir+ l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, ll*Noccs + d);
 				}
 			}
 			dur_lt /=poplt;
@@ -3978,8 +3985,9 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 			for(d=0;d<Noccs;d++){
 				for(duri=1;duri<24;duri++){
 					int tM1 = t>0 ? t-1 : t;
-					pop_t_l += durpop_t_ldur[t][duri*Ndir+ l*Noccs+ d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
-					dur_t_l += (double)duri * durpop_t_ldur[t][duri*Ndir+ l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
+					int ll = duri> (int) bdur_t(t) ? l + Noccs+1 : l;
+					pop_t_l += durpop_t_ldur[t][duri*Ndir+ l*Noccs+ d]*gsl_matrix_get(gld_hist, tM1, ll*Noccs + d);
+					dur_t_l += (double)duri * durpop_t_ldur[t][duri*Ndir+ l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, ll*Noccs + d);
 				}
 			}
 			dur_t_l /= pop_t_l;
@@ -3996,10 +4004,11 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 		double popt_LTU =0;
 		for(duri=0;duri<24;duri++){
 			for(l=0;l<Noccs+1;l++){
+				int ll = duri> (int) bdur_t(t) ? l + Noccs+1 : l;
 				for(d=0;d<Noccs;d++){
 					int tM1 = t>0 ? t-1 : t;
-					popt += durpop_t_ldur[t][duri*Ndir + l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
-					if(duri>=6)popt_LTU += durpop_t_ldur[t][duri*Ndir + l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, l*Noccs + d);
+					popt += durpop_t_ldur[t][duri*Ndir + l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, ll*Noccs + d);
+					if(duri>=6)popt_LTU += durpop_t_ldur[t][duri*Ndir + l*Noccs + d]*gsl_matrix_get(gld_hist, tM1, ll*Noccs + d);
 				}
 			}
 		}
@@ -4008,91 +4017,6 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 	}
 
 
-	/*for(t=0;t<Ndraw;t++){
-		double d_dur = 0.0;
-		for(l=0;l<Noccs+1;l++){
-			d_dur_l[l] = 0.0;//gsl_matrix_get(x_u_hist,t,l)*gsl_matrix_get(gld_hist,t,l*Noccs+d);
-
-			for(tp=50;tp>0;tp--){
-				int tidx = t-tp < 0 ? Ndraw + t - tp : t - tp;
-				//int tidx = t+tp>Ndraw-1 ? t - Ndraw + tp : t + tp;
-				double d_dur_ld = 0.0;
-				double x_dur_l = 0.0;
-				for(d=0;d<Noccs;d++){
-					x_dur_l	 += gsl_matrix_get(gld_hist,tidx,l*Noccs+d)*exp(- gsl_matrix_get(pld_hist,tidx,l*Noccs+d));
-					d_dur_ld += gsl_matrix_get(gld_hist,tidx,l*Noccs+d)*exp(- gsl_matrix_get(pld_hist,tidx,l*Noccs+d))
-							*(gsl_matrix_get(pld_hist,tidx,l*Noccs+d)*((double)tp)
-							+ (1.0 - gsl_matrix_get(pld_hist,tidx,l*Noccs+d))*d_dur_l[l]);
-				}
-				d_dur_l[l] = d_dur_ld/x_dur_l;
-			}
-			d_dur += d_dur_l[l]*gsl_matrix_get(x_u_hist,t,l);
-			s_mom->dur_l[l] +=d_dur_l[l]/((double) Ndraw);
-
-			gsl_matrix_set(s_mom->dur_l_hist,t,l,d_dur_l[l]);
-		}
-		gsl_vector_set(s_mom->dur_hist,t,d_dur);
-		s_mom->E_dur += d_dur/((double) Ndraw);
-
-
-		double d_sddur = 0.0;
-		for(l=0;l<Noccs+1;l++){
-			double d_sddur_l = 0.0;//gsl_matrix_get(x_u_hist,t,l)*gsl_matrix_get(gld_hist,t,l*Noccs+d);
-			double fnd_l = 0.0;
-			for(tp=50;tp>0;tp--){
-				int tidx = t-tp < 0 ? Ndraw + t - tp : t - tp;
-				//int tidx = t+tp>Ndraw-1 ? t - Ndraw + tp : t + tp;
-				double d_sddur_ld = 0.0;
-				double x_sddur_ld = 0.0;
-				for(d=0;d<Noccs;d++){
-					x_sddur_ld += gsl_matrix_get(gld_hist,tidx,l*Noccs+d)*exp(- gsl_matrix_get(pld_hist,tidx,l*Noccs+d));
-					d_sddur_ld += gsl_matrix_get(gld_hist,tidx,l*Noccs+d)*exp(- gsl_matrix_get(pld_hist,tidx,l*Noccs+d))
-							*( gsl_matrix_get(pld_hist,tidx,l*Noccs+d)*pow((double)tp -d_dur_l[l],2)
-							+ (1.0 - gsl_matrix_get(pld_hist,tidx,l*Noccs+d))*d_sddur_l);
-				}
-				d_sddur_l = d_sddur_ld/x_sddur_ld;
-			}
-			for(d=0; d<Noccs;d++)
-				fnd_l += gsl_matrix_get(gld_hist,t,l*Noccs+d)*gsl_matrix_get(pld_hist,t,l*Noccs+d);
-
-			//d_sddur_l = pow(fnd_l,-2);
-			d_sddur +=(pow( d_dur_l[l] - d_dur,2) + d_sddur_l)*gsl_matrix_get(x_u_hist,t,l);
-		}
-		d_sddur  = 0.0;
-		double x_sddur = 0.0;
-		for(l=0;l<Noccs+1;l++){
-			for(d=0;d<Noccs;d++){
-				if(gsl_matrix_get(pld_hist,t,l*Noccs+d)>0.0){
-					d_sddur += gsl_matrix_get(gld_hist,t,l*Noccs+d)*gsl_matrix_get(x_u_hist,t,l)*pow(gsl_matrix_get(pld_hist,t,l*Noccs+d),-2);
-					x_sddur+= gsl_matrix_get(gld_hist,t,l*Noccs+d)*gsl_matrix_get(x_u_hist,t,l);
-				}
-			}
-		}
-		d_sddur /= x_sddur;
-		d_sddur  = sqrt(d_sddur);
-
-
-		s_mom->sd_dur += d_sddur/(double)Ndraw;
-		double d_6mo = 0.0;
-
-		for(l=0;l<Noccs+1;l++){
-			double d_6mo_l = 1.0;//gsl_matrix_get(x_u_hist,t,l)*gsl_matrix_get(gld_hist,t,l*Noccs+d);
-			double x_6mo_l = 0.0;
-			for(tp=6;tp>0;tp--){
-				int tidx = t+tp>Ndraw-1 ? t - Ndraw + tp : t + tp;
-				for(d=0;d<Noccs;d++){
-					d_6mo_l += gsl_matrix_get(gld_hist,tidx,l*Noccs+d)*exp(- gsl_matrix_get(pld_hist,tidx,l*Noccs+d))
-									*(1.0-gsl_matrix_get(pld_hist,tidx,l*Noccs+d))*d_6mo_l;
-					x_6mo_l += gsl_matrix_get(gld_hist,tidx,l*Noccs+d)*exp(- gsl_matrix_get(pld_hist,tidx,l*Noccs+d));
-				}
-				d_6mo_l /=x_6mo_l;
-			}
-			d_6mo += d_6mo_l*gsl_matrix_get(x_u_hist,t,l);
-		}
-		s_mom->pr6mo += d_6mo/(double)Ndraw;
-	}
-	s_mom->sd_dur =pow(s_mom->sd_dur,0.5);
-	*/
 	free(d_dur_l);
 	for(t=0;t<Ndraw;t++)
 		free(durpop_t_ldur[t]);
@@ -4103,7 +4027,18 @@ int dur_dist(struct dur_moments * s_mom, const gsl_matrix * gld_hist, const gsl_
 	return status;
 }
 
+double bdur_t(int t){
+	double bd_here = bdur;
+	// corresponds to Nov 2008 -> Dec 2013
+	if( t >= 157 || t<= 217 ){
+		if(bdur_expr == 0)
+			bd_here = 24.;
+		else
+			bd_here = bdur;
+	}
 
+	return bd_here;
+}
 
 int TGR(struct st_wr * st){
 
